@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-cat setup.sh | ssh exe.dev new \
+cat setup-vm.sh | ssh exe.dev new \
 --name "$EXE_PREFIX-$REPO_NAME" \
 --tag dev \
 --tag "$REPO_NAME" \
