@@ -21,8 +21,9 @@ Creates a "devbox" VM with extra installed tools (above what comes with exeuntu 
 Dependencies:
 
 1. exe.dev account with Github integration set up.
-2. Local SSH key that has full privileges in your exe.dev account.
+   - Local SSH key that has full privileges in your exe.dev account.
 3. Tailscale account.
+4. Claude subscription.
 
 Usage:
 
