@@ -2,6 +2,9 @@
 
 Scripts and notes for setting up a VM for agentic development in the cloud.
 
+> [!NOTE]
+> These scripts are meant for personal use, and made available online for example / reference purposes only. Please fork and edit yourself if you want to adjust anything.
+
 Stack:
 
 - exe.dev VM
