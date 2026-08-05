@@ -5,10 +5,18 @@ Scripts and notes for setting up a VM for agentic development in the cloud.
 Stack:
 
 - exe.dev VM
-- Herdr
-- Claude
-- Mosh
 - Tailscale
+
+Creates a "devbox" VM with extra installed tools (above what comes with exeuntu by default):
+
+- fzf
+- mosh
+- mise
+- nnn
+- lazygit
+- herdr
+- tailscale (w/ssh)
+- claude plugins
 
 Dependencies:
 
