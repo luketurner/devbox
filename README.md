@@ -1,9 +1,9 @@
 # Devbox setup
 
-Scripts and notes for setting up a VM for agentic development in the cloud.
+A small pyinfra-based tool for setting up a VM for agentic development in the cloud.
 
 > [!NOTE]
-> These scripts are meant for personal use, and made available online for example / reference purposes only. Please fork and edit yourself if you want to adjust anything.
+> This tool is meant for personal use, and made available online for example / reference purposes only. Please fork and edit yourself if you want to adjust anything.
 
 Stack:
 
@@ -21,35 +21,57 @@ Creates a "devbox" VM with extra installed tools (above what comes with exeuntu 
 - tailscale (w/ssh)
 - claude plugins
 
-Dependencies:
+## Prerequisites
 
-1. exe.dev account with Github integration set up.
-   - Local SSH key that has full privileges in your exe.dev account.
-3. Tailscale account.
-4. Claude subscription.
+- An exe.dev account with an SSH key that has full privileges to create VMs
+  and integrations.
+- [`uv`](https://docs.astral.sh/uv/).
+- The `claude` CLI installed locally.
+- A Tailscale account.
 
-Usage:
+## One-time Tailscale setup
 
-1. Set environment variables.
-2. Run scripts.
-3. Take any manual steps as documented below.
+Create a Tailscale OAuth client with scope `Devices > Auth Keys` (write), and
+define a tag (e.g. `tag:devbox`) with an appropriate owner/`autoApprovers`
+entry in your tailnet ACL so the devbox VM can join automatically.
+
+Put the OAuth client id/secret, tailnet, and tag into
+`~/.config/devbox/config.toml`:
+
+```toml
+ts_oauth_client_id = "..."
+ts_oauth_client_secret = "..."
+ts_tailnet = "..."
+ts_tag = "tag:devbox"
+```
+
+Or just leave them out — the first run will prompt for any missing values and
+save them there for you.
+
+## One-time Claude setup
+
+The first run invokes `claude setup-token`, which opens a browser locally for
+you to authenticate. The resulting token is cached in
+`~/.config/devbox/config.toml` so subsequent runs don't need to log in again.
+
+## Usage
 
 ```bash
-export GITHUB_USER="me"
-export REPO_NAME="my-repo"
-export EXE_PREFIX="my-unique-prefix"
-
-# run once per Github repo
-./add-repo.sh
-
-# run to create new VM for github repo and open the setup script logs on the server.
-# you'll need to click the Tailscale link in the logs and login in your browser for
-# the script to be able to complete.
-./create-vm.sh
-
-# run the following in herdr:
-claude # login, trust workspace, and exit.
-claude rc --permission-mode=bypassPermissions --spawn=same-dir
-
-# then detach the session with C-b q
+uv run devbox.py <user>/<repo> [--prefix <prefix>]
 ```
+
+This creates the exe.dev GitHub integration and VM if they don't already
+exist, provisions the VM via pyinfra, and starts a detached `claude` session
+for the repo.
+
+Once it finishes, connect with:
+
+```bash
+ssh <prefix>-<repo>.exe.xyz herdr attach devbox
+```
+
+## Config
+
+Per-repo config is cached under `.devbox/` (gitignored) in the current
+directory, so re-running `uv run devbox.py <user>/<repo>` picks up the same
+prefix and settings without prompting again.
