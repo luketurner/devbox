@@ -1,6 +1,8 @@
 """Start a detached herdr session running claude on the VM (idempotent)."""
 from __future__ import annotations
 
+import shlex
+
 SESSION = "devbox"
 
 
@@ -11,6 +13,6 @@ def session_exists_cmd(name: str) -> str:
 
 def build_start_session_cmd(repo: str) -> str:
     claude = "claude rc --permission-mode=bypassPermissions --spawn=same-dir"
-    start = f"herdr new -d -s {SESSION} -c ~/{repo} -- {claude}"
+    start = f"herdr new -d -s {SESSION} -c ~/{shlex.quote(repo)} -- {claude}"
     # No-op if the session already exists.
     return f"{session_exists_cmd(SESSION)} || {start}"

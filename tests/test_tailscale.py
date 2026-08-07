@@ -10,6 +10,11 @@ def test_build_key_request():
     assert caps["preauthorized"] is True
     assert caps["reusable"] is False
     assert caps["tags"] == ["tag:devbox"]
+    assert body["expirySeconds"] == 3600
+
+
+def test_build_key_request_expiry_seconds():
+    assert tailscale.build_key_request("tag:x")["expirySeconds"] == 3600
 
 
 def test_parse_key_response():

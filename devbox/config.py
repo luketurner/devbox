@@ -33,7 +33,9 @@ def _encode(data: dict) -> str:
 
 def save_toml(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.chmod(0o700)
     path.write_text(_encode(data))
+    path.chmod(0o600)
 
 
 def merge(*layers: dict) -> dict:

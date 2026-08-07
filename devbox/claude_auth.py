@@ -15,14 +15,22 @@ def extract_token(output: str) -> str:
 
 
 def _run_setup_token() -> str:
-    # Inherits the terminal so the local browser OAuth loopback works.
-    proc = subprocess.run(
+    # Streams output to the user's terminal in real time (so the login
+    # URL/instructions are visible) while also capturing it to extract the
+    # token.
+    proc = subprocess.Popen(
         ["claude", "setup-token"],
-        capture_output=True,
-        text=True,
-        check=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
-    return extract_token(proc.stdout)
+    captured = []
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        print(line, end="")           # stream to the user so the browser/login prompt is visible
+        captured.append(line)
+    code = proc.wait()
+    if code != 0:
+        raise subprocess.CalledProcessError(code, ["claude", "setup-token"])
+    return extract_token("".join(captured))
 
 
 def ensure_token(cached: str | None, *, runner=_run_setup_token) -> str:

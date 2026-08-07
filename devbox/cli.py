@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -17,12 +18,17 @@ ACCOUNT_REQUIRED = ["ts_oauth_client_id", "ts_oauth_client_secret",
 REPO_REQUIRED = ["github_user", "repo_name", "exe_prefix"]
 
 
+_USER_REPO_RE = re.compile(r"[A-Za-z0-9._-]+")
+
+
 def split_repo(spec: str) -> tuple[str, str]:
     if "/" not in spec:
         raise ValueError(f"expected user/repo, got: {spec!r}")
     user, repo = spec.split("/", 1)
     if not user or not repo:
         raise ValueError(f"expected user/repo, got: {spec!r}")
+    if not _USER_REPO_RE.fullmatch(user) or not _USER_REPO_RE.fullmatch(repo):
+        raise ValueError(f"invalid user/repo: {spec!r}")
     return user, repo
 
 
@@ -41,7 +47,11 @@ def preflight() -> list[str]:
 def _prompt(field: str, secret: bool = False) -> str:
     import questionary
     ask = questionary.password if secret else questionary.text
-    return ask(f"{field}: ").ask()
+    value = ask(f"{field}: ").ask()
+    if value is None:
+        print(f"aborted: no value for {field}", file=sys.stderr)
+        raise SystemExit(1)
+    return value
 
 
 def _resolve_repo_config(user, repo, prefix) -> dict:

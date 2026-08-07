@@ -18,7 +18,7 @@ def build_key_request(tag: str) -> dict:
                 }
             }
         },
-        "expirySeconds": 900,
+        "expirySeconds": 3600,
     }
 
 

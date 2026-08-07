@@ -25,6 +25,12 @@ def test_toml_round_trip(tmp_path: Path):
     assert config.load_toml(p) == {"github_user": "me", "repo_name": "r"}
 
 
+def test_save_toml_restricts_permissions(tmp_path: Path):
+    p = tmp_path / "sub" / "c.toml"
+    config.save_toml(p, {"github_user": "me", "repo_name": "r"})
+    assert p.stat().st_mode & 0o777 == 0o600
+
+
 def test_load_missing_returns_empty(tmp_path: Path):
     assert config.load_toml(tmp_path / "nope.toml") == {}
 
