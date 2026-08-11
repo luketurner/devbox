@@ -1,0 +1,34 @@
+#!/bin/sh
+# Launch a Paseo agent inside an ephemeral smolvm microVM.
+#
+# Paseo's resolveProviderLaunch treats a configured `command` as the binary
+# plus a *prefix* of the argv and appends the adapter's own per-session
+# arguments (--resume=<uuid>, --model, --settings {...}) after it. So this
+# wrapper must be argv-transparent: forward "$@" verbatim to claude.
+#
+# There is no ${workspace} placeholder in Paseo's provider config, but the
+# agent is spawned with cwd set to the workspace, so $PWD is how we learn
+# what to mount.
+set -e
+
+SMOLVM="$HOME/.smolvm/smolvm"
+IMAGE="$HOME/.local/share/paseo-agent.tar"
+
+# The daemon already exports this (its own wrapper sources devbox.env and
+# children inherit), but source it too so the wrapper works when run by hand.
+[ -f "$HOME/.config/devbox.env" ] && . "$HOME/.config/devbox.env"
+
+# --cpus/--mem are required, not tuning: smolvm defaults to 4 vCPU / 8192 MiB
+# and this box has 2 vCPU / 7 GiB total with Hub and Postgres already resident.
+#
+# -i without -t is deliberate: it keeps stdin open as a pipe, where -t would
+# allocate a PTY and mangle the protocol stream.
+exec "$SMOLVM" machine run -i \
+    --image "$IMAGE" \
+    --volume "$PWD:$PWD" \
+    --workdir "$PWD" \
+    --cpus 2 \
+    --mem 3072 \
+    --net \
+    --env "CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN" \
+    -- claude "$@"

@@ -140,6 +140,67 @@ server.shell(
     ],
 )
 
+# --- smolvm + sandboxed agent provider --------------------------------------
+# --no-modify-path: the installer would append its own PATH line to .bashrc,
+# which fights the files.line-managed block above. The wrapper uses an absolute
+# path, so this is only for interactive use.
+server.shell(
+    name="Install smolvm",
+    commands=[
+        f"test -x {HOME}/.smolvm/smolvm || "
+        "curl -sSL https://smolmachines.com/install.sh | bash -s -- --no-modify-path"
+    ],
+)
+files.line(
+    name="bashrc: smolvm on PATH",
+    path=BASHRC,
+    line=r"export PATH=\$HOME/.smolvm:\$PATH",
+    replace="export PATH=$HOME/.smolvm:$PATH",
+)
+# smolvm needs /dev/kvm, which is root:kvm 0660.
+server.shell(
+    name="Grant exedev access to /dev/kvm",
+    commands=["usermod -aG kvm exedev"],
+    _sudo=True,
+)
+files.put(
+    name="Install agent image Dockerfile",
+    src=f"{FILES}/paseo-agent.Dockerfile",
+    dest=f"{HOME}/.config/paseo-agent/Dockerfile",
+    mode="644",
+)
+files.put(
+    name="Install paseo-agent-vm wrapper",
+    src=f"{FILES}/paseo-agent-vm",
+    dest=f"{HOME}/.local/bin/paseo-agent-vm",
+    mode="755",
+)
+files.put(
+    name="Install provider registration script",
+    src=f"{FILES}/register-provider.py",
+    dest=f"{HOME}/.config/paseo-agent/register-provider.py",
+    mode="755",
+)
+# A bare --image name is always a registry reference, so the locally built
+# image has to reach smolvm as a `docker save` archive.
+server.shell(
+    name="Build agent microVM image",
+    commands=[
+        f"test -f {HOME}/.local/share/paseo-agent.tar || ("
+        f"docker build -t paseo-agent:latest {HOME}/.config/paseo-agent && "
+        f"docker save paseo-agent:latest -o {HOME}/.local/share/paseo-agent.tar)"
+    ],
+)
+# Restart only on a real config change, so re-deploys don't kill live sessions.
+server.shell(
+    name="Register claude-vm provider",
+    commands=[
+        "export XDG_RUNTIME_DIR=/run/user/$(id -u) && "
+        f"if python3 {HOME}/.config/paseo-agent/register-provider.py | grep -q changed; "
+        "then systemctl --user restart paseo.service; fi"
+    ],
+)
+
 # --- paseo hub (docker compose, tailnet UI + filtered public webhook) -------
 # Docker and Compose ship with exeuntu and exedev is in the docker group, so
 # no apt work and no sudo here. Lingering is already enabled above.

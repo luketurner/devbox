@@ -23,6 +23,7 @@ Creates a "devbox" VM with extra installed tools (above what comes with exeuntu 
 - claude plugins
 - paseo (daemon autostarted on the tailnet, port 6767)
 - paseo hub, self-hosted via docker compose (tailnet, port 3000)
+- smolvm (microVM sandbox for paseo agents)
 
 ## Prerequisites
 
@@ -105,6 +106,27 @@ export PASEO_HUB_API_KEY=paseo_pk_...
 ```
 
 Then `systemctl --user restart paseo`.
+
+### Sandboxed agents
+
+Paseo has no sandboxing of its own — agents normally run as your user, with your
+credentials and the whole box in reach. The deploy adds a second provider,
+**Claude (microVM)**, selectable per session; the stock `claude` provider is left
+untouched, so a broken sandbox never blocks you.
+
+Picking it runs the agent inside an ephemeral [smolvm](https://github.com/smol-machines/smolvm)
+microVM via `~/.local/bin/paseo-agent-vm`. Only the workspace directory is
+mounted, at the same path inside and out. The agent gets a separate kernel: no
+`~/.ssh`, no `~/.config/devbox.env`, no `~/.paseo`, no Hub Postgres, no tailnet
+interface, no docker socket.
+
+Two things deliberately still cross the boundary. `CLAUDE_CODE_OAUTH_TOKEN` is
+passed in, because the agent has to authenticate. And egress is unrestricted
+(`--net`), so the boundary is filesystem and credential isolation, not network
+containment — smolvm's `--allow-host` is the lever if you want to tighten that.
+
+The VM is capped at 2 vCPU / 3 GiB (smolvm defaults to 4 vCPU / 8 GiB, more than
+this box has), so expect one sandboxed session at a time alongside Hub.
 
 ### Public webhooks (opt-in)
 
