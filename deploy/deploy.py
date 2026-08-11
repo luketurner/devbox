@@ -13,50 +13,42 @@ FILES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "files")
 # --- OS packages -------------------------------------------------------------
 apt.packages(
     name="Install base tools",
-    packages=["mosh", "nnn", "fzf", "fd-find", "extrepo"],
+    packages=["fd-find"],
     update=True,
     _sudo=True,
 )
 
-# --- mise via extrepo --------------------------------------------------------
+# --- node via NodeSource -----------------------------------------------------
+# Ubuntu's own nodejs is 18.x (EOL). Guarded on the sources file so a re-deploy
+# doesn't re-run the setup script.
 server.shell(
-    name="Enable mise apt repo via extrepo",
-    commands=["extrepo enable mise"],
+    name="Enable nodesource apt repo",
+    commands=[
+        "test -f /etc/apt/sources.list.d/nodesource.list || "
+        "curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -"
+    ],
     _sudo=True,
 )
 apt.packages(
-    name="Install mise",
-    packages=["mise"],
+    name="Install node",
+    packages=["nodejs"],
     update=True,
     _sudo=True,
 )
 
-# --- node via mise -----------------------------------------------------------
-# mise itself is on the default PATH (apt puts it in /usr/bin), but anything it
-# provides is not: `mise activate` only runs from .bashrc, which pyinfra's
-# non-interactive shell never sources. Hence `mise exec` / shims below.
-server.shell(
-    name="Install node via mise",
-    commands=["mise use -g node@lts"],
-    _env={"MISE_YES": "1"},
-)
-
 # --- paseo CLI via npm (guarded by presence) ---------------------------------
-# `mise reshim` is what creates the shim the systemd unit's PATH relies on.
+# Installs to /usr/lib/node_modules with the binary in /usr/bin, which is
+# already on the default non-interactive PATH.
 server.shell(
     name="Install paseo CLI",
-    commands=[
-        f"test -x {HOME}/.local/share/mise/shims/paseo || "
-        "(mise exec node@lts -- npm install -g @getpaseo/cli && mise reshim)"
-    ],
+    commands=["command -v paseo >/dev/null 2>&1 || npm install -g @getpaseo/cli"],
+    _sudo=True,
 )
 
 # --- shell config (idempotent, unlike >> appends) ----------------------------
 for line in [
     "export EDITOR=vim",
-    'eval "$(mise activate bash)"',
     "export GH_HOST=github.int.exe.xyz",
-    "export NNN_PLUG='o:fzopen'",
 ]:
     files.line(
         name=f"bashrc: {line}",
@@ -64,35 +56,6 @@ for line in [
         line=line.replace("(", r"\(").replace(")", r"\)").replace("$", r"\$"),
         replace=line,
     )
-
-# --- lazygit (guarded by presence) ------------------------------------------
-server.shell(
-    name="Install lazygit",
-    commands=[
-        "command -v lazygit >/dev/null 2>&1 || ("
-        'LG_VER=$(curl -s "https://api.github.com/repos/jesseduffield/lazygit/releases/latest" '
-        "| grep -Po '\"tag_name\": *\"v\\K[^\"]*') && "
-        "LG_ARCH=$(uname -m | sed -e 's/aarch64/arm64/') && "
-        'curl -Lo /tmp/lazygit.tar.gz "https://github.com/jesseduffield/lazygit/releases/download/v${LG_VER}/lazygit_${LG_VER}_Linux_${LG_ARCH}.tar.gz" && '
-        "tar -C /tmp -xf /tmp/lazygit.tar.gz lazygit && "
-        "sudo install /tmp/lazygit -D -t /usr/local/bin/)"
-    ],
-)
-
-# --- herdr (guarded by presence) --------------------------------------------
-server.shell(
-    name="Install herdr",
-    commands=["command -v herdr >/dev/null 2>&1 || curl -fsSL https://herdr.dev/install.sh | sh"],
-)
-
-# --- nnn plugins -------------------------------------------------------------
-server.shell(
-    name="Install nnn plugins",
-    commands=[
-        f"test -d {HOME}/.config/nnn/plugins || "
-        'sh -c "$(curl -Ls https://raw.githubusercontent.com/jarun/nnn/master/plugins/getplugs)"'
-    ],
-)
 
 # --- Tailscale (guarded by status) ------------------------------------------
 server.shell(

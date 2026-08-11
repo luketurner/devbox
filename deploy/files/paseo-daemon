@@ -3,8 +3,8 @@
 # ExecStart= because we need command substitution and the env file.
 set -e
 
-# mise activation lives in .bashrc, which systemd never sources.
-export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:$PATH"
+# systemd never sources .bashrc, and claude lives in ~/.local/bin.
+export PATH="$HOME/.local/bin:$PATH"
 
 # Claude token the daemon's spawned agents need.
 [ -f "$HOME/.config/devbox.env" ] && . "$HOME/.config/devbox.env"

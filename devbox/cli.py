@@ -11,7 +11,7 @@ import time
 
 import httpx
 
-from devbox import claude_auth, config, exe, provision, session, tailscale
+from devbox import claude_auth, config, exe, provision, tailscale
 
 ACCOUNT_REQUIRED = ["ts_oauth_client_id", "ts_oauth_client_secret",
                     "ts_tailnet", "ts_tag",
@@ -144,10 +144,7 @@ def main(argv=None) -> int:
                               hub_owner_password=account["hub_owner_password"])
     provision.run_pyinfra(env)
 
-    # Start detached claude session (idempotent).
-    print("Starting detached claude session...")
-    subprocess.run(["ssh", host, session.build_start_session_cmd(repo)],
-                   check=True)
-
-    print(f"Done. Connect with:  ssh {host} herdr attach devbox")
+    print(f"Done. Provisioned {host}.")
+    print("Paseo daemon (6767) and Hub (3000) are on the tailnet — "
+          "see the README to pair.")
     return 0

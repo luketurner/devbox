@@ -12,13 +12,8 @@ Stack:
 
 Creates a "devbox" VM with extra installed tools (above what comes with exeuntu by default):
 
-- fzf
-- mosh
-- mise
-- node (via mise, pinned to `lts`)
-- nnn
-- lazygit
-- herdr
+- fd-find
+- node (via NodeSource, current LTS)
 - tailscale (w/ssh)
 - claude plugins
 - paseo (daemon autostarted on the tailnet, port 6767)
@@ -65,14 +60,11 @@ uv run devbox.py <user>/<repo> [--prefix <prefix>]
 ```
 
 This creates the exe.dev GitHub integration and VM if they don't already
-exist, provisions the VM via pyinfra, and starts a detached `claude` session
-for the repo.
+exist, and provisions the VM via pyinfra.
 
-Once it finishes, connect with:
-
-```bash
-ssh <prefix>-<repo>.exe.xyz herdr attach devbox
-```
+Once it finishes, drive the box through Paseo (see below) — pair a client with
+the daemon, or open the Hub dashboard. For a shell, plain `ssh
+<prefix>-<repo>.exe.xyz` still works.
 
 ## Paseo
 
