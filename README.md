@@ -20,6 +20,67 @@ Creates a "devbox" VM with extra installed tools (above what comes with exeuntu 
 - paseo hub, self-hosted via docker compose (tailnet, port 3000)
 - smolvm (microVM sandbox for paseo agents)
 
+## Architecture
+
+```mermaid
+graph TB
+    subgraph you["Your machine"]
+        CLI["<b>devbox.py</b><br/>orchestrator"]
+        CLIENT["<b>Paseo client</b><br/>phone / desktop / web"]
+    end
+
+    subgraph pub["Public internet"]
+        HOOKS["GitHub / Slack<br/>webhooks"]
+        PROXY["<b>exe.dev HTTPS proxy</b><br/>&lt;vm&gt;.exe.xyz<br/><i>private by default,<br/>one port, opt-in</i>"]
+    end
+
+    subgraph box["exe.dev VM — the devbox"]
+        DAEMON["<b>paseo daemon</b><br/>paseo.service<br/>tailnet:6767 + web UI"]
+        REPO["~/repo<br/><i>workspace / worktree</i>"]
+        HOSTCLAUDE["claude<br/><i>stock provider<br/>runs on the host</i>"]
+
+        subgraph dc["docker compose — paseo-hub.service"]
+            CADDY["<b>Caddy filter</b><br/>0.0.0.0:8080<br/><i>POST /webhook only,<br/>else 302 to tailnet</i>"]
+            HUB["<b>Paseo Hub</b><br/>tailnet:3000"]
+            PG["Postgres 17<br/><i>not published&nbsp;</i>"]
+        end
+
+        subgraph mvm["smolvm microVM — ephemeral, per session"]
+            VMCLAUDE["claude<br/><i>claude-vm provider&nbsp;</i><br/>2 vCPU / 3 GiB"]
+        end
+    end
+
+    CLI -->|"ssh + pyinfra"| DAEMON
+    CLIENT -->|tailnet| DAEMON
+    CLIENT -->|tailnet| HUB
+    HOOKS --> PROXY
+    PROXY --> CADDY
+    CADDY --> HUB
+    HUB --- PG
+    DAEMON --> HOSTCLAUDE
+    DAEMON --> REPO
+    DAEMON -->|"paseo-agent-vm"| VMCLAUDE
+    REPO -.->|"--volume, same path"| VMCLAUDE
+
+    classDef public fill:#ffe0e0,stroke:#c0392b,color:#1a1a1a
+    classDef tailnet fill:#e0f0ff,stroke:#2874a6,color:#1a1a1a
+    classDef sandbox fill:#e8f8e8,stroke:#27865a,color:#1a1a1a
+    class HOOKS,PROXY public
+    class DAEMON,HUB,CLIENT tailnet
+    class VMCLAUDE sandbox
+```
+
+Three boundaries are worth reading off that diagram:
+
+- **The tailnet is the auth boundary.** The daemon (6767) and the Hub dashboard (3000) bind to
+  the VM's Tailscale IP only, never `0.0.0.0`. Postgres isn't published at all.
+- **Exactly one path is reachable from the public internet**, and only after you opt in with
+  `ssh exe.dev share set-public`: `POST /webhook`. The Caddy container redirects everything else
+  back to the tailnet, so the Hub UI never answers publicly.
+- **Agents are sandboxed only on the `claude-vm` path.** There the agent gets its own kernel and
+  sees just the mounted workspace. The stock `claude` provider still runs on the host with your
+  credentials — that's the fallback, kept deliberately.
+
 ## Prerequisites
 
 - An exe.dev account with an SSH key that has full privileges to create VMs
