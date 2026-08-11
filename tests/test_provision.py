@@ -15,9 +15,13 @@ def test_build_env_sets_secrets_in_env():
         ts_key="tskey-abc",
         claude_token="sk-ant-xyz",
         repo="repo",
+        hub_owner_email="me@example.com",
+        hub_owner_password="hunter2hunter2",
     )
     assert env["PATH"] == "/usr/bin"
     assert env["DEVBOX_HOST"] == "acme-repo.exe.xyz"
     assert env["DEVBOX_TS_AUTHKEY"] == "tskey-abc"
     assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-xyz"
     assert env["DEVBOX_REPO"] == "repo"
+    assert env["DEVBOX_HUB_OWNER_EMAIL"] == "me@example.com"
+    assert env["DEVBOX_HUB_OWNER_PASSWORD"] == "hunter2hunter2"

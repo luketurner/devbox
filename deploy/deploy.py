@@ -140,6 +140,45 @@ server.shell(
     ],
 )
 
+# --- paseo hub (docker compose, tailnet UI + filtered public webhook) -------
+# Docker and Compose ship with exeuntu and exedev is in the docker group, so
+# no apt work and no sudo here. Lingering is already enabled above.
+git.repo(
+    name="Clone paseo hub",
+    src="https://github.com/getpaseo/hub.git",
+    dest=f"{HOME}/.local/share/paseo-hub",
+)
+# files.template is the one op that both interpolates host data and sets mode;
+# the owner password must not land in the mode-less ~/.config/devbox.env.
+files.template(
+    name="Write Hub bootstrap env",
+    src=f"{FILES}/hub.env.j2",
+    dest=f"{HOME}/.config/paseo-hub/hub.env",
+    mode="600",
+    owner_email=data.hub_owner_email,
+    owner_password=data.hub_owner_password,
+)
+for _src, _dest, _mode in [
+    ("paseo-hub-compose.override.yml", ".config/paseo-hub/compose.override.yml", "644"),
+    ("paseo-hub-Caddyfile", ".config/paseo-hub/Caddyfile", "644"),
+    ("paseo-hub", ".local/bin/paseo-hub", "755"),
+    ("paseo-hub.service", ".config/systemd/user/paseo-hub.service", "644"),
+]:
+    files.put(
+        name=f"Install {_src}",
+        src=f"{FILES}/{_src}",
+        dest=f"{HOME}/{_dest}",
+        mode=_mode,
+    )
+server.shell(
+    name="Enable and start paseo hub",
+    commands=[
+        "export XDG_RUNTIME_DIR=/run/user/$(id -u) && "
+        "systemctl --user daemon-reload && "
+        "systemctl --user enable --now paseo-hub.service"
+    ],
+)
+
 # --- GitHub repo clone (idempotent) -----------------------------------------
 # The reflection endpoint names the attached github integration = repo dir.
 git.repo(

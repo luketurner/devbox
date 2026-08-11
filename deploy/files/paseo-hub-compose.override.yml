@@ -1,0 +1,21 @@
+# Layered over getpaseo/hub's compose.yml. Compose merges `ports` by appending,
+# so replacing upstream's all-interfaces "3000:3000" needs !override.
+services:
+  hub:
+    ports: !override
+      - "${PASEO_HUB_BIND}:3000:3000"
+
+  # Internet-facing filter: forwards POST /webhook and nothing else. Binds all
+  # interfaces on purpose — this is the surface the exe.dev proxy reaches.
+  webhook-proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      hub:
+        condition: service_healthy
+    environment:
+      PASEO_HUB_TAILNET_URL: "${PASEO_HUB_TAILNET_URL}"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ${PASEO_HUB_CONF}/Caddyfile:/etc/caddy/Caddyfile:ro

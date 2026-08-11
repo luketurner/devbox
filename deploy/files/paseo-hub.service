@@ -1,0 +1,14 @@
+[Unit]
+Description=Paseo Hub (docker compose)
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=%h/.local/bin/paseo-hub up
+ExecStop=%h/.local/bin/paseo-hub down
+# The first `up` pulls three images.
+TimeoutStartSec=600
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,40 @@
+#!/bin/sh
+# Bring the self-hosted Paseo Hub compose stack up or down. Everything
+# runtime-derived is computed here so a reboot or a new Tailscale IP
+# re-renders correctly.
+set -e
+CLONE="$HOME/.local/share/paseo-hub"
+CONF="$HOME/.config/paseo-hub"
+umask 077
+
+[ -f "$CONF/hub.env" ] && . "$CONF/hub.env"
+
+# Generate once. This secret derives execution credentials — regenerating it
+# on every deploy would invalidate sessions.
+[ -f "$CONF/auth-secret" ] || openssl rand -hex 32 > "$CONF/auth-secret"
+
+TS_IP="$(tailscale ip -4 | head -n1)"
+TS_NAME="$(tailscale status --json | python3 -c \
+    'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')"
+
+# Upstream reads .env from the compose project dir. DATABASE_URL and PORT are
+# omitted: upstream's compose `environment:` block already overrides them.
+cat > "$CLONE/.env" <<EOF
+PASEO_HUB_APP_URL=http://${TS_NAME}:3000
+PASEO_HUB_AUTH_SECRET=$(cat "$CONF/auth-secret")
+PASEO_HUB_BIND=${TS_IP}
+PASEO_HUB_CONF=${CONF}
+PASEO_HUB_TAILNET_URL=http://${TS_NAME}:3000
+PASEO_REGISTRATION_MODE=invite_only
+PASEO_ORGANIZATION_CREATION=disabled
+PASEO_BOOTSTRAP_ORGANIZATION=devbox
+PASEO_BOOTSTRAP_OWNER_EMAIL=${DEVBOX_HUB_OWNER_EMAIL}
+PASEO_BOOTSTRAP_OWNER_PASSWORD=${DEVBOX_HUB_OWNER_PASSWORD}
+EOF
+
+COMPOSE="docker compose -f $CLONE/compose.yml -f $CONF/compose.override.yml"
+case "${1:-up}" in
+    up)   exec $COMPOSE up -d --wait ;;
+    down) exec $COMPOSE down ;;
+    *)    echo "usage: paseo-hub [up|down]" >&2; exit 2 ;;
+esac

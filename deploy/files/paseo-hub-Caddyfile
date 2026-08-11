@@ -1,0 +1,14 @@
+# Hub's entire inbound webhook surface is one route: POST /webhook. Everything
+# else redirects to the tailnet URL, so the UI never answers on the public port.
+:8080 {
+	@webhook {
+		method POST
+		path /webhook
+	}
+	handle @webhook {
+		reverse_proxy hub:3000
+	}
+	handle {
+		redir {$PASEO_HUB_TAILNET_URL}{uri} 302
+	}
+}

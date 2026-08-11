@@ -14,7 +14,8 @@ import httpx
 from devbox import claude_auth, config, exe, provision, session, tailscale
 
 ACCOUNT_REQUIRED = ["ts_oauth_client_id", "ts_oauth_client_secret",
-                    "ts_tailnet", "ts_tag"]
+                    "ts_tailnet", "ts_tag",
+                    "hub_owner_email", "hub_owner_password"]
 REPO_REQUIRED = ["github_user", "repo_name", "exe_prefix"]
 
 
@@ -68,7 +69,7 @@ def _resolve_account_config() -> dict:
     acct = config.load_toml(config.ACCOUNT_PATH)
     changed = False
     for field in config.missing_fields(acct, ACCOUNT_REQUIRED):
-        acct[field] = _prompt(field, secret=field.endswith("secret"))
+        acct[field] = _prompt(field, secret=field.endswith(("secret", "password")))
         changed = True
     if changed:
         config.save_toml(config.ACCOUNT_PATH, acct)
@@ -138,7 +139,9 @@ def main(argv=None) -> int:
     # Provision via pyinfra (secrets via env).
     print("Provisioning via pyinfra...")
     env = provision.build_env(dict(os.environ), host=host, ts_key=ts_key,
-                              claude_token=token, repo=repo)
+                              claude_token=token, repo=repo,
+                              hub_owner_email=account["hub_owner_email"],
+                              hub_owner_password=account["hub_owner_password"])
     provision.run_pyinfra(env)
 
     # Start detached claude session (idempotent).

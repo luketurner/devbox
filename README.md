@@ -22,6 +22,7 @@ Creates a "devbox" VM with extra installed tools (above what comes with exeuntu 
 - tailscale (w/ssh)
 - claude plugins
 - paseo (daemon autostarted on the tailnet, port 6767)
+- paseo hub, self-hosted via docker compose (tailnet, port 3000)
 
 ## Prerequisites
 
@@ -82,6 +83,45 @@ point it at `<devbox-tailnet-name>:6767`, or run on the VM:
 ```bash
 paseo daemon pair --json
 ```
+
+### Self-hosted Hub
+
+Every devbox also runs [Paseo Hub](https://github.com/getpaseo/hub) — Hub plus
+Postgres, via docker compose, managed by the `paseo-hub` systemd user service.
+The dashboard is at `http://<devbox-tailnet-name>:3000`, published on the
+Tailscale IP only.
+
+The owner email and password are prompted on first run and cached in
+`~/.config/devbox/config.toml`. **The password must be at least 12 characters** —
+Hub refuses to bootstrap otherwise.
+
+To link the local daemon to the local Hub, log into the dashboard, create an
+organization API key, and append it to `~/.config/devbox.env` on the VM (the
+daemon wrapper already sources that file):
+
+```bash
+export PASEO_HUB_URL=http://<devbox-tailnet-name>:3000
+export PASEO_HUB_API_KEY=paseo_pk_...
+```
+
+Then `systemctl --user restart paseo`.
+
+### Public webhooks (opt-in)
+
+Provider webhooks are inbound from GitHub/Slack, so they can't reach a
+tailnet-only Hub. A Caddy container on port 8080 forwards **only `POST /webhook`**
+to Hub and redirects everything else back to the tailnet URL, so the dashboard
+never answers publicly. Nothing is internet-reachable until you opt in:
+
+```bash
+ssh exe.dev share port <prefix>-<repo> 8080
+ssh exe.dev share set-public <prefix>-<repo>
+```
+
+Then set the GitHub App's webhook URL to
+`https://<prefix>-<repo>.exe.xyz/webhook`, with the secret matching
+`GITHUB_WEBHOOK_SECRET` in `~/.config/paseo-hub/hub.env`. Revert exposure with
+`ssh exe.dev share set-private <prefix>-<repo>`.
 
 ## Config
 
