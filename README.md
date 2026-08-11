@@ -15,11 +15,13 @@ Creates a "devbox" VM with extra installed tools (above what comes with exeuntu 
 - fzf
 - mosh
 - mise
+- node (via mise, pinned to `lts`)
 - nnn
 - lazygit
 - herdr
 - tailscale (w/ssh)
 - claude plugins
+- paseo (daemon autostarted on the tailnet, port 6767)
 
 ## Prerequisites
 
@@ -68,6 +70,17 @@ Once it finishes, connect with:
 
 ```bash
 ssh <prefix>-<repo>.exe.xyz herdr attach devbox
+```
+
+## Paseo
+
+The [paseo](https://paseo.sh) daemon autostarts as a systemd user service, bound
+to the VM's Tailscale IP on port 6767 — the tailnet is the auth boundary, since
+the daemon can spawn coding agents on the box. To pair a phone or desktop client,
+point it at `<devbox-tailnet-name>:6767`, or run on the VM:
+
+```bash
+paseo daemon pair --json
 ```
 
 ## Config

@@ -1,0 +1,12 @@
+[Unit]
+Description=Paseo daemon
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/paseo-daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

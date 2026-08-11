@@ -1,0 +1,18 @@
+#!/bin/sh
+# ExecStart wrapper for the paseo daemon. A script rather than an inline
+# ExecStart= because we need command substitution and the env file.
+set -e
+
+# mise activation lives in .bashrc, which systemd never sources.
+export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:$PATH"
+
+# Claude token the daemon's spawned agents need.
+[ -f "$HOME/.config/devbox.env" ] && . "$HOME/.config/devbox.env"
+
+# Bind to the tailnet only, never 0.0.0.0 — the daemon can spawn agents on this
+# box. Resolved at start so it survives IP changes.
+TS_IP="$(tailscale ip -4 | head -n1)"
+export PASEO_LISTEN="${TS_IP}:6767"
+export PASEO_HOSTNAMES="${TS_IP},$(hostname)"
+
+exec paseo daemon start --web-ui --no-relay

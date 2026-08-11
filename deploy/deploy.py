@@ -1,10 +1,14 @@
 """Provision an exe.dev devbox: tools, tailscale, repo, claude."""
+import os
+
 from pyinfra import host
 from pyinfra.operations import apt, files, git, server
 
 data = host.data
 HOME = "/home/exedev"
 BASHRC = f"{HOME}/.bashrc"
+# files.put resolves relative srcs against the CWD, not this file — be explicit.
+FILES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "files")
 
 # --- OS packages -------------------------------------------------------------
 apt.packages(
@@ -25,6 +29,26 @@ apt.packages(
     packages=["mise"],
     update=True,
     _sudo=True,
+)
+
+# --- node via mise -----------------------------------------------------------
+# mise itself is on the default PATH (apt puts it in /usr/bin), but anything it
+# provides is not: `mise activate` only runs from .bashrc, which pyinfra's
+# non-interactive shell never sources. Hence `mise exec` / shims below.
+server.shell(
+    name="Install node via mise",
+    commands=["mise use -g node@lts"],
+    _env={"MISE_YES": "1"},
+)
+
+# --- paseo CLI via npm (guarded by presence) ---------------------------------
+# `mise reshim` is what creates the shim the systemd unit's PATH relies on.
+server.shell(
+    name="Install paseo CLI",
+    commands=[
+        f"test -x {HOME}/.local/share/mise/shims/paseo || "
+        "(mise exec node@lts -- npm install -g @getpaseo/cli && mise reshim)"
+    ],
 )
 
 # --- shell config (idempotent, unlike >> appends) ----------------------------
@@ -82,6 +106,37 @@ server.shell(
         "tailscale status >/dev/null 2>&1 || "
         f"sudo tailscale up --auth-key='{data.ts_authkey}' --ssh",
         "sudo tailscale set --ssh",
+    ],
+)
+
+# --- paseo daemon (systemd --user, tailnet-bound) ---------------------------
+# Must follow tailscale: the wrapper resolves the tailnet IP at start, and the
+# service is started as part of this deploy.
+files.put(
+    name="Install paseo daemon wrapper",
+    src=f"{FILES}/paseo-daemon",
+    dest=f"{HOME}/.local/bin/paseo-daemon",
+    mode="755",
+)
+files.put(
+    name="Install paseo systemd user unit",
+    src=f"{FILES}/paseo.service",
+    dest=f"{HOME}/.config/systemd/user/paseo.service",
+    mode="644",
+)
+server.shell(
+    name="Enable lingering for user services",
+    commands=["loginctl enable-linger exedev"],
+    _sudo=True,
+)
+server.shell(
+    name="Enable and start paseo daemon",
+    commands=[
+        # XDG_RUNTIME_DIR is unset over non-interactive SSH; systemctl --user
+        # can't find the user manager without it.
+        "export XDG_RUNTIME_DIR=/run/user/$(id -u) && "
+        "systemctl --user daemon-reload && "
+        "systemctl --user enable --now paseo.service"
     ],
 )
 
