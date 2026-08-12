@@ -24,28 +24,28 @@ Creates a "devbox" VM with extra installed tools (above what comes with exeuntu 
 ```mermaid
 graph TB
     subgraph you["Your machine"]
-        CLI["<b>devbox.py</b><br/>orchestrator"]
-        CLIENT["<b>Paseo client</b><br/>phone / desktop / web"]
+        CLI["devbox.py\norchestrator"]
+        CLIENT["Paseo client\nphone / desktop / web"]
     end
 
     subgraph pub["Public internet"]
-        HOOKS["GitHub / Slack<br/>webhooks"]
-        PROXY["<b>exe.dev HTTPS proxy</b><br/>&lt;vm&gt;.exe.xyz<br/><i>private by default,<br/>one port, opt-in</i>"]
+        HOOKS["GitHub / Slack\nwebhooks"]
+        PROXY["exe.dev HTTPS proxy\nPREFIX-REPO.exe.xyz\nprivate by default\none port, opt-in"]
     end
 
-    subgraph box["exe.dev VM — the devbox"]
-        DAEMON["<b>paseo daemon</b><br/>paseo.service<br/>tailnet:6767 + web UI"]
-        REPO["~/repo<br/><i>workspace / worktree</i>"]
-        HOSTCLAUDE["claude<br/><i>stock provider<br/>runs on the host</i>"]
+    subgraph box["exe.dev VM - the devbox"]
+        DAEMON["paseo daemon\npaseo.service\ntailnet:6767 + web UI"]
+        REPO["~/repo\nworkspace / worktree"]
+        HOSTCLAUDE["claude\nstock provider\nruns on the host"]
 
-        subgraph dc["docker compose — paseo-hub.service"]
-            CADDY["<b>Caddy filter</b><br/>0.0.0.0:8080<br/><i>POST /webhook only,<br/>else 302 to tailnet</i>"]
-            HUB["<b>Paseo Hub</b><br/>tailnet:3000"]
-            PG["Postgres 17<br/><i>not published&nbsp;</i>"]
+        subgraph dc["docker compose - paseo-hub.service"]
+            CADDY["Caddy filter\n0.0.0.0:8080\nPOST /webhook only\nelse 302 to tailnet"]
+            HUB["Paseo Hub\ntailnet:3000"]
+            PG["Postgres 17\nnot published"]
         end
 
-        subgraph mvm["smolvm microVM — ephemeral, per session"]
-            VMCLAUDE["claude<br/><i>claude-vm provider&nbsp;</i><br/>2 vCPU / 3 GiB"]
+        subgraph mvm["smolvm microVM - ephemeral, per session"]
+            VMCLAUDE["claude\nclaude-vm provider\n2 vCPU / 3 GiB"]
         end
     end
 
