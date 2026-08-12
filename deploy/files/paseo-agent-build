@@ -1,0 +1,25 @@
+#!/bin/sh
+# Build the agent guest image and save it as an OCI archive for smolvm.
+#
+# Guarded on a hash of the Dockerfile rather than on the archive merely
+# existing: the previous check skipped the build whenever the tar was present,
+# so editing the Dockerfile silently changed nothing.
+set -e
+
+CONF="$HOME/.config/paseo-agent"
+IMAGE="$HOME/.local/share/paseo-agent.tar"
+STAMP="$HOME/.local/share/paseo-agent.sha256"
+
+HASH="$(sha256sum "$CONF/Dockerfile" | cut -d' ' -f1)"
+
+if [ -f "$IMAGE" ] && [ "$HASH" = "$(cat "$STAMP" 2>/dev/null)" ]; then
+    echo "unchanged"
+    exit 0
+fi
+
+docker build -t paseo-agent:latest "$CONF"
+# A bare --image name is always a registry reference, so smolvm needs the
+# locally built image as an archive.
+docker save paseo-agent:latest -o "$IMAGE"
+echo "$HASH" > "$STAMP"
+echo "rebuilt"

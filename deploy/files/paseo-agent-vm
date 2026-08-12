@@ -14,21 +14,93 @@ set -e
 SMOLVM="$HOME/.smolvm/smolvm"
 IMAGE="$HOME/.local/share/paseo-agent.tar"
 
+# Dev-server ports forwarded out of the VM. smolvm only ever binds these on
+# the host's 127.0.0.1 (it rejects an IP in the spec), so `tailscale serve`
+# republishes them onto the tailnet — see the README.
+#
+# 3000 is deliberately absent: Hub already owns it on the tailnet. Run a dev
+# server on one of these instead. 8080 is likewise taken, by the Caddy filter.
+PORTS="5173 8000 8081"
+
 # The daemon already exports this (its own wrapper sources devbox.env and
 # children inherit), but source it too so the wrapper works when run by hand.
 [ -f "$HOME/.config/devbox.env" ] && . "$HOME/.config/devbox.env"
+
+# smolvm runs the VM as `smolvm-bin _boot-vm` in its OWN process group, so it
+# does not die with its launcher: a SIGKILLed wrapper leaves the microVM
+# running, reparented to init, still holding the forwarded ports the next
+# session needs. Two defences follow — a trap for SIGTERM, and this sweep for
+# anything a previous SIGKILL already stranded. Matching on the ephemeral
+# cache path avoids touching a machine someone detached on purpose.
+#
+# A SIGKILLed wrapper strands the launcher too, so there are two shapes to
+# catch: a VM reparented to init, or a live VM whose launcher was reparented.
+# Restricting the match to the ephemeral cache path keeps this away from any
+# machine someone detached deliberately.
+reap_orphans() {
+    killed=""
+    for vm in $(pgrep -f 'smolvm-bin _boot-vm .*/\.cache/smolvm/vms/' 2>/dev/null); do
+        parent="$(ps -o ppid= -p "$vm" 2>/dev/null | tr -d ' ')"
+        if [ "$parent" = "1" ]; then
+            kill -9 "$vm" 2>/dev/null || true
+            killed="$killed $vm"
+        elif [ "$(ps -o ppid= -p "$parent" 2>/dev/null | tr -d ' ')" = "1" ]; then
+            kill -9 "$vm" "$parent" 2>/dev/null || true
+            killed="$killed $vm $parent"
+        fi
+    done
+    [ -n "$killed" ] || return 0
+
+    # kill -9 is asynchronous and a dying VM holds its forwarded ports until it
+    # actually exits, so without this the new VM races it and dies with
+    # "virtio-net: Address already in use".
+    i=0
+    while [ "$i" -lt 15 ]; do
+        alive=0
+        for p in $killed; do kill -0 "$p" 2>/dev/null && alive=1; done
+        [ "$alive" = "0" ] && return 0
+        i=$((i + 1))
+        sleep 1
+    done
+}
+reap_orphans
+
+port_args=""
+for p in $PORTS; do
+    port_args="$port_args -p $p:$p"
+done
 
 # --cpus/--mem are required, not tuning: smolvm defaults to 4 vCPU / 8192 MiB
 # and this box has 2 vCPU / 7 GiB total with Hub and Postgres already resident.
 #
 # -i without -t is deliberate: it keeps stdin open as a pipe, where -t would
 # allocate a PTY and mangle the protocol stream.
-exec "$SMOLVM" machine run -i \
+#
+# Not exec'd, so this shell survives to clean up after the VM.
+"$SMOLVM" machine run -i \
     --image "$IMAGE" \
     --volume "$PWD:$PWD" \
     --workdir "$PWD" \
     --cpus 2 \
     --mem 3072 \
     --net \
+    $port_args \
     --env "CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN" \
-    -- claude "$@"
+    -- claude "$@" &
+LAUNCHER=$!
+
+# The VM is a child of the launcher while the launcher lives, which is the only
+# window in which we can find it by PID.
+stop_vm() {
+    vm="$(pgrep -P "$LAUNCHER" -f '_boot-vm' 2>/dev/null)"
+    kill "$LAUNCHER" 2>/dev/null || true
+    for p in $vm; do kill "$p" 2>/dev/null || true; done
+}
+trap 'stop_vm; exit 143' TERM INT HUP
+
+set +e
+wait "$LAUNCHER"
+status=$?
+set -e
+stop_vm
+exit "$status"

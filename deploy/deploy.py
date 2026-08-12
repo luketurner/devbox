@@ -133,6 +133,12 @@ files.put(
     mode="644",
 )
 files.put(
+    name="Install agent image build script",
+    src=f"{FILES}/paseo-agent-build",
+    dest=f"{HOME}/.local/bin/paseo-agent-build",
+    mode="755",
+)
+files.put(
     name="Install paseo-agent-vm wrapper",
     src=f"{FILES}/paseo-agent-vm",
     dest=f"{HOME}/.local/bin/paseo-agent-vm",
@@ -145,15 +151,21 @@ files.put(
     mode="755",
 )
 # A bare --image name is always a registry reference, so the locally built
-# image has to reach smolvm as a `docker save` archive.
+# image has to reach smolvm as a `docker save` archive. The script guards on a
+# hash of the Dockerfile, so editing it actually triggers a rebuild.
 server.shell(
     name="Build agent microVM image",
-    commands=[
-        f"test -f {HOME}/.local/share/paseo-agent.tar || ("
-        f"docker build -t paseo-agent:latest {HOME}/.config/paseo-agent && "
-        f"docker save paseo-agent:latest -o {HOME}/.local/share/paseo-agent.tar)"
-    ],
+    commands=[f"{HOME}/.local/bin/paseo-agent-build"],
 )
+# Dev servers inside the microVM are forwarded to the devbox's 127.0.0.1 only
+# (smolvm rejects a bind IP), so republish them onto the tailnet. --http avoids
+# depending on tailnet HTTPS certs, matching how the daemon and Hub are served.
+for _port in ["5173", "8000", "8081"]:
+    server.shell(
+        name=f"tailscale serve dev port {_port}",
+        commands=[f"tailscale serve --bg --http {_port} {_port}"],
+        _sudo=True,
+    )
 # Restart only on a real config change, so re-deploys don't kill live sessions.
 server.shell(
     name="Register claude-vm provider",
@@ -224,21 +236,3 @@ files.line(
     path=BASHRC,
     line=r"source ~/.config/devbox.env",
 )
-
-# --- Claude plugins (guarded / tolerant of already-installed) ---------------
-_plugins = [
-    "superpowers@superpowers-marketplace",
-    "elements-of-style@superpowers-marketplace",
-    "double-shot-latte@superpowers-marketplace",
-    "superpowers-chrome@superpowers-marketplace",
-    "frontend-design@claude-plugins-official",
-]
-server.shell(
-    name="Add claude marketplace",
-    commands=["claude plugin marketplace add obra/superpowers-marketplace || true"],
-)
-for plugin in _plugins:
-    server.shell(
-        name=f"Install claude plugin {plugin}",
-        commands=[f"claude plugin install {plugin} || true"],
-    )

@@ -15,7 +15,6 @@ Creates a "devbox" VM with extra installed tools (above what comes with exeuntu 
 - fd-find
 - node (via NodeSource, current LTS)
 - tailscale (w/ssh)
-- claude plugins
 - paseo (daemon autostarted on the tailnet, port 6767)
 - paseo hub, self-hosted via docker compose (tailnet, port 3000)
 - smolvm (microVM sandbox for paseo agents)
@@ -180,6 +179,60 @@ containment — smolvm's `--allow-host` is the lever if you want to tighten that
 
 The VM is capped at 2 vCPU / 3 GiB (smolvm defaults to 4 vCPU / 8 GiB, more than
 this box has), so expect one sandboxed session at a time alongside Hub.
+
+#### The guest image
+
+`deploy/files/paseo-agent.Dockerfile` is the whole contract for what the agent
+can reach. It's plain Debian — no language runtime, on the assumption that
+projects install their own — plus `git`, `curl`, the natively-installed `claude`,
+and the Claude plugins.
+
+Plugins are baked into the image rather than installed on the devbox, because
+the microVM mounts only the workspace and so can't see the host's `~/.claude`.
+Don't be tempted to mount that directory in: it also holds
+`.credentials.json`.
+
+To add a dependency, edit the Dockerfile and re-run the deploy. The build is
+guarded on a hash of the Dockerfile, so an edit does trigger a rebuild:
+
+```bash
+~/.local/bin/paseo-agent-build     # prints "rebuilt" or "unchanged"
+```
+
+For per-project setup, smolvm also reads a `Smolfile` (TOML) with `init`
+commands whose results are cached into a reusable artifact — a better fit than
+the image for anything repo-specific.
+
+#### Reaching a dev server
+
+Ports `5173`, `8000` and `8081` are forwarded out of the microVM. smolvm can
+only bind them on the devbox's `127.0.0.1` — it rejects an IP in the port spec —
+so `tailscale serve` republishes each onto the tailnet:
+
+```
+agent's dev server :5173  →  devbox 127.0.0.1:5173  →  http://<devbox>.<tailnet>.ts.net:5173
+```
+
+Use the full MagicDNS name: `serve` routes by hostname, so the bare tailnet IP
+returns 404. Ports are fixed when the VM starts, so point your dev server at one
+of the three above. `3000`, `6767` and `8080` are deliberately not in the list —
+Hub, the daemon and the webhook filter already hold those on the tailnet.
+
+#### VM cleanup
+
+smolvm runs the VM as `smolvm-bin _boot-vm` in its own process group, so it does
+not die with its launcher. Left alone, a killed session strands a microVM that
+keeps holding the forwarded ports, and the next session fails to start. The
+wrapper handles both cases:
+
+- **SIGTERM/HUP/INT** — a trap stops the launcher and the VM before exiting.
+- **SIGKILL** — nothing can run, so the next launch sweeps first. It kills any
+  `_boot-vm` under `~/.cache/smolvm/vms/` that has been reparented to init (or
+  whose launcher has), then *waits for it to exit* — `kill -9` is asynchronous
+  and the dying VM holds its ports long enough to lose the race otherwise.
+
+If you ever run a detached machine deliberately (`machine run -d`), note the
+sweep only matches the ephemeral cache path, so named machines are left alone.
 
 ### Public webhooks (opt-in)
 
