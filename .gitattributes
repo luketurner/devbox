@@ -1,0 +1,9 @@
+# Everything in this repo is deployed to a Linux VM, and several files are
+# shipped verbatim by pyinfra's files.put (shell scripts, systemd units, a
+# Dockerfile). A CRLF shebang makes the kernel look for an interpreter named
+# "/bin/sh\r", which surfaces as the baffling "sh: 1: <script>: not found" even
+# though the file is plainly there.
+#
+# Without this, a checkout on a machine with core.autocrlf=true ships broken
+# scripts. Pin the working tree to LF regardless of the local git config.
+* text=auto eol=lf
