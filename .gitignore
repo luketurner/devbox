@@ -1,3 +1,6 @@
+# devbox config/secrets, kept in the checkout
+local/
+
 # python
 __pycache__/
 *.pyc

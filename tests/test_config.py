@@ -19,6 +19,14 @@ def test_missing_fields():
     assert config.missing_fields({"a": "x", "b": "y"}, ["a", "b"]) == []
 
 
+def test_account_path_is_repo_local():
+    assert config.ACCOUNT_PATH.name == "config.toml"
+    assert config.ACCOUNT_PATH.parent.name == "local"
+    # Anchored to the checkout: pyproject.toml sits alongside local/.
+    assert (config.REPO_ROOT / "pyproject.toml").exists()
+    assert config.ACCOUNT_PATH.parent.parent == config.REPO_ROOT
+
+
 def test_toml_round_trip(tmp_path: Path):
     p = tmp_path / "sub" / "c.toml"
     config.save_toml(p, {"ts_tailnet": "me", "exe_vm_name": "r"})

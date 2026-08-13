@@ -94,7 +94,7 @@ define a tag (e.g. `tag:devbox`) with an appropriate owner/`autoApprovers`
 entry in your tailnet ACL so the devbox VM can join automatically.
 
 Put the OAuth client id/secret, tailnet, and tag into
-`~/.config/devbox/config.toml`:
+`local/config.toml`:
 
 ```toml
 ts_oauth_client_id = "..."
@@ -110,7 +110,7 @@ save them there for you.
 
 The first run invokes `claude setup-token`, which opens a browser locally for
 you to authenticate. The resulting token is cached in
-`~/.config/devbox/config.toml` so subsequent runs don't need to log in again.
+`local/config.toml` so subsequent runs don't need to log in again.
 
 ## Usage
 
@@ -154,7 +154,7 @@ The dashboard is at `http://<devbox-tailnet-name>:3000`, published on the
 Tailscale IP only.
 
 The owner email and password are prompted on first run and cached in
-`~/.config/devbox/config.toml`. **The password must be at least 12 characters** —
+`local/config.toml`. **The password must be at least 12 characters** —
 Hub refuses to bootstrap otherwise.
 
 To link the local daemon to the local Hub, log into the dashboard, create an
@@ -292,6 +292,12 @@ Then set the GitHub App's webhook URL to
 
 ## Config
 
-Everything lives in `~/.config/devbox/config.toml` (mode 0600): the VM name, the
-Tailscale credentials, the Hub owner login, and the cached Claude token. Missing
-values are prompted for on first use and reused thereafter.
+Everything lives in `local/config.toml` inside the checkout (mode 0600, in a
+0700 directory): the VM name, the Tailscale credentials, the Hub owner login,
+and the cached Claude token. Missing values are prompted for on first use and
+reused thereafter.
+
+`local/` is gitignored, so these values can't be committed by accident. Because
+the config travels with the clone rather than living in `~/.config`, a second
+checkout gets its own config — and deleting the checkout deletes the secrets
+with it.

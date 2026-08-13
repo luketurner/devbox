@@ -4,7 +4,12 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-ACCOUNT_PATH = Path.home() / ".config" / "devbox" / "config.toml"
+# Config lives in the checkout, not ~/.config, so it travels with the clone.
+# Derived from __file__ rather than the CWD so running from a subdirectory
+# doesn't silently start a second config — the same reason deploy.py resolves
+# its files dir this way. local/ is gitignored.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+ACCOUNT_PATH = REPO_ROOT / "local" / "config.toml"
 
 
 def load_toml(path: Path) -> dict:
