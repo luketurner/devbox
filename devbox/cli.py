@@ -9,17 +9,22 @@ import subprocess
 import sys
 import time
 
-import httpx
+from devbox import claude_auth, config, exe, paseo, provision
 
-from devbox import claude_auth, config, exe, paseo, provision, tailscale
-
-ACCOUNT_REQUIRED = ["exe_vm_name",
-                    "ts_oauth_client_id", "ts_oauth_client_secret",
-                    "ts_tailnet", "ts_tag",
+ACCOUNT_REQUIRED = ["exe_vm_name", "ts_auth_key",
                     "hub_owner_email", "hub_owner_password"]
 
+TS_KEY_PREFIX = "tskey-"
 
 _USER_REPO_RE = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def validate_auth_key(key: str) -> str:
+    if not key.startswith(TS_KEY_PREFIX):
+        raise ValueError(
+            f"expected a Tailscale auth key starting with {TS_KEY_PREFIX!r}"
+        )
+    return key
 
 
 def split_repo(spec: str) -> tuple[str, str]:
@@ -50,6 +55,10 @@ def preflight(tools=("ssh", "claude")) -> list[str]:
     return [tool for tool in tools if shutil.which(tool) is None]
 
 
+def is_secret_field(field: str) -> bool:
+    return field.endswith(("secret", "password", "key"))
+
+
 def _prompt(field: str, secret: bool = False) -> str:
     import questionary
     ask = questionary.password if secret else questionary.text
@@ -70,7 +79,7 @@ def _resolve_account_config(required=None, overrides=None) -> dict:
     # merge skips None/"", so an omitted flag keeps the cached value.
     merged = config.merge(acct, overrides or {})
     for field in config.missing_fields(merged, required or ACCOUNT_REQUIRED):
-        merged[field] = _prompt(field, secret=field.endswith(("secret", "password")))
+        merged[field] = _prompt(field, secret=is_secret_field(field))
     if merged != acct:
         config.save_toml(config.ACCOUNT_PATH, merged)
     return merged
@@ -102,6 +111,13 @@ def _cmd_provision(ns) -> int:
 
     account = _resolve_account_config(overrides={"exe_vm_name": ns.vm_name})
 
+    # Fail here rather than half-way through the deploy on the VM.
+    try:
+        ts_key = validate_auth_key(account["ts_auth_key"])
+    except ValueError as err:
+        print(f"ts_auth_key: {err}", file=sys.stderr)
+        return 1
+
     # Claude token (local browser login once), cached in account config.
     token = claude_auth.ensure_token(account.get("claude_token"))
     if token != account.get("claude_token"):
@@ -119,16 +135,9 @@ def _cmd_provision(ns) -> int:
     print(f"Waiting for SSH to {host}...")
     _wait_for_ssh(host)
 
-    # Fresh ephemeral Tailscale key per run.
-    print("Minting Tailscale auth key...")
-    with httpx.Client(base_url=tailscale.TS_API, timeout=30) as client:
-        ts_key = tailscale.mint_key(
-            account["ts_tailnet"], account["ts_tag"],
-            account["ts_oauth_client_id"], account["ts_oauth_client_secret"],
-            client=client,
-        )
-
-    # Provision via pyinfra (secrets via env).
+    # Provision via pyinfra (secrets via env). The deploy only runs
+    # `tailscale up` when the node isn't already joined, so a one-time key is
+    # never spent twice.
     print("Provisioning via pyinfra...")
     env = provision.build_env(dict(os.environ), host=host, ts_key=ts_key,
                               claude_token=token,

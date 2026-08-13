@@ -29,13 +29,13 @@ def test_account_path_is_repo_local():
 
 def test_toml_round_trip(tmp_path: Path):
     p = tmp_path / "sub" / "c.toml"
-    config.save_toml(p, {"ts_tailnet": "me", "exe_vm_name": "r"})
-    assert config.load_toml(p) == {"ts_tailnet": "me", "exe_vm_name": "r"}
+    config.save_toml(p, {"exe_vm_name": "devbox", "hub_owner_email": "me@example.com"})
+    assert config.load_toml(p) == {"exe_vm_name": "devbox", "hub_owner_email": "me@example.com"}
 
 
 def test_save_toml_restricts_permissions(tmp_path: Path):
     p = tmp_path / "sub" / "c.toml"
-    config.save_toml(p, {"ts_tailnet": "me", "exe_vm_name": "r"})
+    config.save_toml(p, {"exe_vm_name": "devbox", "hub_owner_email": "me@example.com"})
     assert p.stat().st_mode & 0o777 == 0o600
 
 

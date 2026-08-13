@@ -89,22 +89,30 @@ Three boundaries are worth reading off that diagram:
 
 ## One-time Tailscale setup
 
-Create a Tailscale OAuth client with scope `Devices > Auth Keys` (write), and
-define a tag (e.g. `tag:devbox`) with an appropriate owner/`autoApprovers`
-entry in your tailnet ACL so the devbox VM can join automatically.
+Define a tag (e.g. `tag:devbox`) with an appropriate owner/`autoApprovers`
+entry in your tailnet ACL so the devbox VM can join automatically, then
+[generate an auth key](https://tailscale.com/docs/features/access-control/auth-keys)
+in the admin console:
 
-Put the OAuth client id/secret, tailnet, and tag into
-`local/config.toml`:
+- **Tagged** with your devbox tag. Tagged devices have key expiry disabled, so
+  the node stays connected indefinitely; an untagged one would need
+  re-authentication after 180 days.
+- **Not ephemeral.** An ephemeral node is removed from the tailnet 30–60 minutes
+  after going offline and needs to re-authenticate to come back — so stopping
+  the VM overnight would strand it, with the key already spent.
+- **One-time** is fine, and is all you need. The deploy only runs
+  `tailscale up` when the node isn't already joined, so the key is consumed once
+  at first join and never touched again. Generate a new one only if you recreate
+  the VM.
+
+Put it in `local/config.toml`:
 
 ```toml
-ts_oauth_client_id = "..."
-ts_oauth_client_secret = "..."
-ts_tailnet = "..."
-ts_tag = "tag:devbox"
+ts_auth_key = "tskey-auth-..."
 ```
 
-Or just leave them out — the first run will prompt for any missing values and
-save them there for you.
+Or leave it out — the first run prompts for any missing values (with the key
+masked) and saves them there for you.
 
 ## One-time Claude setup
 
@@ -293,7 +301,7 @@ Then set the GitHub App's webhook URL to
 ## Config
 
 Everything lives in `local/config.toml` inside the checkout (mode 0600, in a
-0700 directory): the VM name, the Tailscale credentials, the Hub owner login,
+0700 directory): the VM name, the Tailscale auth key, the Hub owner login,
 and the cached Claude token. Missing values are prompted for on first use and
 reused thereafter.
 

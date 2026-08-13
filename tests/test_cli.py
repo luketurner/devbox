@@ -26,6 +26,26 @@ def test_split_repo_allows_valid_charset():
     assert cli.split_repo("me/my-repo.js_v2") == ("me", "my-repo.js_v2")
 
 
+def test_validate_auth_key_accepts_a_tailscale_key():
+    assert cli.validate_auth_key("tskey-auth-abc123") == "tskey-auth-abc123"
+
+
+def test_validate_auth_key_rejects_anything_else():
+    # An OAuth client secret pasted by mistake, for instance.
+    with pytest.raises(ValueError):
+        cli.validate_auth_key("tskey")
+    with pytest.raises(ValueError):
+        cli.validate_auth_key("")
+
+
+def test_auth_key_prompt_is_masked():
+    # Every credential in ACCOUNT_REQUIRED must be prompted for as a secret.
+    assert cli.is_secret_field("ts_auth_key") is True
+    assert cli.is_secret_field("hub_owner_password") is True
+    assert cli.is_secret_field("exe_vm_name") is False
+    assert cli.is_secret_field("hub_owner_email") is False
+
+
 def test_parse_args_provision():
     ns = cli.parse_args(["provision"])
     assert ns.command == "provision"
