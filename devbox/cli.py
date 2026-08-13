@@ -85,21 +85,39 @@ def _resolve_account_config(required=None, overrides=None) -> dict:
     return merged
 
 
-def _ssh_ready(host: str) -> bool:
-    result = subprocess.run(
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host, "true"],
-        capture_output=True,
-    )
-    return result.returncode == 0
+# Trust first-seen host keys, matching the connector setting in
+# deploy/inventory.py. Without this an unknown fingerprint fails every probe --
+# BatchMode can't prompt to accept it -- so the wait below burns its whole
+# timeout on a VM that is actually up. accept-new still refuses a *changed*
+# key, which is what you want if a VM was recreated under the same name.
+SSH_TRUST_OPTS = ["-o", "StrictHostKeyChecking=accept-new"]
+
+
+def build_ssh_probe_args(host: str) -> list[str]:
+    return ["ssh", *SSH_TRUST_OPTS,
+            "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+            host, "true"]
+
+
+def _ssh_ready(host: str) -> tuple[bool, str]:
+    result = subprocess.run(build_ssh_probe_args(host),
+                            capture_output=True, text=True)
+    return result.returncode == 0, result.stderr.strip()
 
 
 def _wait_for_ssh(host: str, timeout=300) -> None:
     deadline = time.monotonic() + timeout
+    last_error = ""
     while time.monotonic() < deadline:
-        if _ssh_ready(host):
+        ready, last_error = _ssh_ready(host)
+        if ready:
             return
         time.sleep(5)
-    raise TimeoutError(f"SSH to {host} not ready within {timeout}s")
+    # Report why, so a changed host key or a refused connection is obvious
+    # rather than looking like a slow boot.
+    raise TimeoutError(
+        f"SSH to {host} not ready within {timeout}s: {last_error or 'no error output'}"
+    )
 
 
 def _cmd_provision(ns) -> int:
@@ -170,7 +188,8 @@ def _cmd_add_repo(ns) -> int:
         exe.add_integration(user, repo, vm_name)
 
     print(f"Registering {user}/{repo} as a Paseo workspace on {host}...")
-    result = subprocess.run(["ssh", host, paseo.build_clone_cmd(user, repo)])
+    result = subprocess.run(
+        ["ssh", *SSH_TRUST_OPTS, host, paseo.build_clone_cmd(user, repo)])
     if result.returncode != 0:
         return result.returncode
 

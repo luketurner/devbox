@@ -46,6 +46,16 @@ def test_auth_key_prompt_is_masked():
     assert cli.is_secret_field("hub_owner_email") is False
 
 
+def test_ssh_probe_trusts_first_seen_host_keys():
+    args = cli.build_ssh_probe_args("vm.exe.xyz")
+    assert args[0] == "ssh"
+    assert args[-2:] == ["vm.exe.xyz", "true"]
+    assert "BatchMode=yes" in args
+    # Without this an unknown fingerprint fails every probe -- BatchMode can't
+    # prompt -- and _wait_for_ssh burns its whole timeout on a healthy VM.
+    assert "StrictHostKeyChecking=accept-new" in args
+
+
 def test_parse_args_provision():
     ns = cli.parse_args(["provision"])
     assert ns.command == "provision"
