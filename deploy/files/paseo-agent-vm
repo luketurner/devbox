@@ -86,7 +86,7 @@ done
     --net \
     $port_args \
     --env "CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN" \
-    -- claude "$@" &
+    -- agent-entry "$@" &
 LAUNCHER=$!
 
 # The VM is a child of the launcher while the launcher lives, which is the only

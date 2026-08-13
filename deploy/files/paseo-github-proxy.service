@@ -1,0 +1,18 @@
+[Unit]
+Description=Forward loopback 443 to the exe.dev GitHub integration
+After=network-online.target
+
+[Service]
+# The integration lives on a link-local address that a microVM cannot route to,
+# but smolvm's TSI backend makes the devbox's own loopback reachable from a
+# guest. This bridges the two.
+#
+# Raw TCP, not an HTTP proxy: TLS passes through untouched, so SNI and
+# certificate validation still work end to end. Forwarded by hostname because
+# that is the documented interface; the address behind it is not.
+ExecStart=/bin/socat TCP-LISTEN:443,bind=127.0.0.1,fork,reuseaddr TCP:github.int.exe.xyz:443
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

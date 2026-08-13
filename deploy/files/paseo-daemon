@@ -6,6 +6,11 @@ set -e
 # systemd never sources .bashrc, and claude lives in ~/.local/bin.
 export PATH="$HOME/.local/bin:$PATH"
 
+# Route gh through the exe.dev GitHub integration. .bashrc has the interactive
+# copy of this, which the daemon never sees — without it Paseo's "Add project"
+# and any gh the daemon runs would hit github.com instead.
+export GH_HOST=github.int.exe.xyz
+
 # Claude token the daemon's spawned agents need.
 [ -f "$HOME/.config/devbox.env" ] && . "$HOME/.config/devbox.env"
 

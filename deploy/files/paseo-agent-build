@@ -10,7 +10,9 @@ CONF="$HOME/.config/paseo-agent"
 IMAGE="$HOME/.local/share/paseo-agent.tar"
 STAMP="$HOME/.local/share/paseo-agent.sha256"
 
-HASH="$(sha256sum "$CONF/Dockerfile" | cut -d' ' -f1)"
+# Hash the whole build context, not just the Dockerfile: agent-entry is COPYed
+# in, so a change to it must rebuild too.
+HASH="$(cat "$CONF"/Dockerfile "$CONF"/agent-entry 2>/dev/null | sha256sum | cut -d' ' -f1)"
 
 if [ -f "$IMAGE" ] && [ "$HASH" = "$(cat "$STAMP" 2>/dev/null)" ]; then
     echo "unchanged"

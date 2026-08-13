@@ -9,8 +9,13 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
+        gh \
         git \
     && rm -rf /var/lib/apt/lists/*
+
+# Route gh through the exe.dev integration rather than github.com. Constant, so
+# it belongs in the image rather than in the launch wrapper.
+ENV GH_HOST=github.int.exe.xyz
 
 # Native installer rather than the deprecated npm package. It refuses to run
 # under sudo but plain root is fine, and it installs under $HOME.
@@ -25,6 +30,9 @@ ENV PATH="/root/.local/bin:$PATH"
 # fresh container, so add it explicitly alongside the third-party one.
 RUN claude plugin marketplace add obra/superpowers-marketplace || true
 RUN claude plugin marketplace add anthropics/claude-plugins-official || true
+COPY agent-entry /usr/local/bin/agent-entry
+RUN chmod +x /usr/local/bin/agent-entry
+
 RUN for plugin in \
         superpowers@superpowers-marketplace \
         elements-of-style@superpowers-marketplace \

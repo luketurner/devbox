@@ -103,6 +103,27 @@ server.shell(
     ],
 )
 
+# --- exe.dev GitHub integration reachable from microVMs ---------------------
+# The integration is served on a link-local address a guest cannot route to,
+# but smolvm's TSI backend makes the devbox's loopback reachable from inside
+# one. socat ships with the image, so no extra package. 443 is privileged,
+# hence a system unit rather than a --user one.
+files.put(
+    name="Install github proxy unit",
+    src=f"{FILES}/paseo-github-proxy.service",
+    dest="/etc/systemd/system/paseo-github-proxy.service",
+    mode="644",
+    _sudo=True,
+)
+server.shell(
+    name="Enable and start github proxy",
+    commands=[
+        "systemctl daemon-reload && "
+        "systemctl enable --now paseo-github-proxy.service"
+    ],
+    _sudo=True,
+)
+
 # --- smolvm + sandboxed agent provider --------------------------------------
 # --no-modify-path: the installer would append its own PATH line to .bashrc,
 # which fights the files.line-managed block above. The wrapper uses an absolute
@@ -131,6 +152,13 @@ files.put(
     src=f"{FILES}/paseo-agent.Dockerfile",
     dest=f"{HOME}/.config/paseo-agent/Dockerfile",
     mode="644",
+)
+# COPYed into the image, so it has to live in the build context.
+files.put(
+    name="Install agent image entrypoint",
+    src=f"{FILES}/agent-entry",
+    dest=f"{HOME}/.config/paseo-agent/agent-entry",
+    mode="755",
 )
 files.put(
     name="Install agent image build script",

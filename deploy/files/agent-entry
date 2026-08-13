@@ -1,0 +1,17 @@
+#!/bin/sh
+# Entrypoint for the agent guest image.
+#
+# The exe.dev GitHub integration is served on a link-local address the guest
+# cannot route to. The devbox forwards it on its own loopback, which smolvm's
+# TSI backend makes reachable as 127.0.0.1 in here, so point the documented
+# hostname at that. /etc/hosts is regenerated per boot, hence doing it here
+# rather than baking it into an image layer.
+# The guest boots without an /etc/hosts at all, so seed the usual entries
+# rather than leaving a file containing only the line below.
+[ -f /etc/hosts ] || printf '127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost\n' > /etc/hosts
+
+grep -q github.int.exe.xyz /etc/hosts 2>/dev/null \
+    || echo "127.0.0.1 github.int.exe.xyz" >> /etc/hosts
+
+# Argv-transparent: Paseo appends the adapter's per-session arguments.
+exec claude "$@"

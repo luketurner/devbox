@@ -234,6 +234,33 @@ wrapper handles both cases:
 If you ever run a detached machine deliberately (`machine run -d`), note the
 sweep only matches the ephemeral cache path, so named machines are left alone.
 
+### GitHub access
+
+Everything goes through the exe.dev GitHub integration, so no tokens live on the
+VM. `git` and `gh` both work on the devbox and inside `claude-vm` microVMs.
+
+Two pieces make the microVM case work. The integration is served on a link-local
+address a guest cannot route to, so `paseo-github-proxy.service` forwards the
+devbox's `127.0.0.1:443` to `github.int.exe.xyz:443` — smolvm's TSI backend makes
+the devbox's loopback reachable from a guest. It's a raw TCP forward, so TLS and
+certificate validation pass through untouched. The guest entrypoint then points
+the hostname at that loopback, and `GH_HOST` is baked into the agent image.
+
+**When adding a project in Paseo, use the integration URL**, not a github.com one:
+
+```
+https://github.int.exe.xyz/<user>/<repo>.git
+```
+
+A workspace cloned that way has the right `origin`, so push and pull from inside
+the microVM work with no further setup.
+
+Note this is a deliberate hole in the sandbox: any microVM can act with the
+integration's authority, including pushing. There is no token for an agent to
+steal, but `systemctl stop paseo-github-proxy` revokes access from every microVM
+at once, and exe.dev supports `--readonly` integrations if you want a tighter
+grant.
+
 ### Public webhooks (opt-in)
 
 Provider webhooks are inbound from GitHub/Slack, so they can't reach a
