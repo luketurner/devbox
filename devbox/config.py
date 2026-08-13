@@ -7,10 +7,6 @@ from pathlib import Path
 ACCOUNT_PATH = Path.home() / ".config" / "devbox" / "config.toml"
 
 
-def repo_config_path(repo_name: str) -> Path:
-    return Path(".devbox") / f"{repo_name}.toml"
-
-
 def load_toml(path: Path) -> dict:
     if not path.exists():
         return {}

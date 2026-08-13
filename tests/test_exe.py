@@ -2,25 +2,26 @@ from devbox import exe
 
 
 def test_vm_host():
-    assert exe.vm_host("acme", "widgets") == "acme-widgets.exe.xyz"
+    assert exe.vm_host("devbox") == "devbox.exe.xyz"
 
 
-def test_build_integration_add_args():
-    args = exe.build_integration_add_args("me", "repo")
+def test_integration_name_is_owner_qualified():
+    assert exe.integration_name("me", "repo") == "me-repo"
+
+
+def test_build_integration_add_args_attaches_to_the_vm():
+    args = exe.build_integration_add_args("me", "repo", "devbox")
     assert args == [
         "integrations", "add", "github",
-        "--name", "repo",
+        "--name", "me-repo",
         "--repository", "me/repo",
-        "--attach", "tag:repo",
+        "--attach", "vm:devbox",
     ]
 
 
 def test_build_new_vm_args():
-    args = exe.build_new_vm_args("acme-repo", ["dev", "repo"])
-    assert args == [
-        "new", "--name", "acme-repo",
-        "--tag", "dev", "--tag", "repo", "--json",
-    ]
+    args = exe.build_new_vm_args("devbox", ["dev"])
+    assert args == ["new", "--name", "devbox", "--tag", "dev", "--json"]
 
 
 def test_parse_items_bare_list():
@@ -35,6 +36,6 @@ def test_parse_items_wrapped():
 
 
 def test_exists_predicates():
-    items = [{"name": "repo"}, {"name": "other"}]
-    assert exe.integration_exists(items, "repo") is True
+    items = [{"name": "me-repo"}, {"name": "other"}]
+    assert exe.integration_exists(items, "me-repo") is True
     assert exe.vm_exists(items, "missing") is False

@@ -5,16 +5,24 @@ import json
 import subprocess
 
 
-def vm_host(prefix: str, repo: str) -> str:
-    return f"{prefix}-{repo}.exe.xyz"
+def vm_host(name: str) -> str:
+    return f"{name}.exe.xyz"
 
 
-def build_integration_add_args(user: str, repo: str) -> list[str]:
+def integration_name(user: str, repo: str) -> str:
+    # Owner-qualified: one VM now serves many repos, and bare repo names
+    # collide across owners.
+    return f"{user}-{repo}"
+
+
+def build_integration_add_args(user: str, repo: str, vm_name: str) -> list[str]:
     return [
         "integrations", "add", "github",
-        "--name", repo,
+        "--name", integration_name(user, repo),
         "--repository", f"{user}/{repo}",
-        "--attach", f"tag:{repo}",
+        # Attach to the VM directly. The old tag:<repo> form paired with a
+        # matching tag on the VM, which is what made this one-VM-per-repo.
+        "--attach", f"vm:{vm_name}",
     ]
 
 
@@ -63,8 +71,8 @@ def list_integrations() -> list[dict]:
     return parse_items(out, ["integrations"])
 
 
-def add_integration(user: str, repo: str) -> None:
-    run_exe(build_integration_add_args(user, repo))
+def add_integration(user: str, repo: str, vm_name: str) -> None:
+    run_exe(build_integration_add_args(user, repo, vm_name))
 
 
 def list_vms() -> list[dict]:

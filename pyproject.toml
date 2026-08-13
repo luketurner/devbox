@@ -1,7 +1,7 @@
 [project]
 name = "devbox"
 version = "0.1.0"
-description = "Provision an exe.dev VM for a GitHub repo via pyinfra"
+description = "Provision an exe.dev VM running Paseo via pyinfra"
 requires-python = ">=3.11"
 dependencies = [
     "pyinfra>=3,<4",

@@ -12,7 +12,6 @@ Stack:
 
 Creates a "devbox" VM with extra installed tools (above what comes with exeuntu by default):
 
-- fd-find
 - node (via NodeSource, current LTS)
 - tailscale (w/ssh)
 - paseo (daemon autostarted on the tailnet, port 6767)
@@ -30,12 +29,12 @@ graph TB
 
     subgraph pub["Public internet"]
         HOOKS["GitHub / Slack\nwebhooks"]
-        PROXY["exe.dev HTTPS proxy\nPREFIX-REPO.exe.xyz\nprivate by default\none port, opt-in"]
+        PROXY["exe.dev HTTPS proxy\nVM-NAME.exe.xyz\nprivate by default\none port, opt-in"]
     end
 
     subgraph box["exe.dev VM - the devbox"]
         DAEMON["paseo daemon\npaseo.service\ntailnet:6767 + web UI"]
-        REPO["~/repo\nworkspace / worktree"]
+        REPO["~/projects/REPO\nworkspace / worktree"]
         HOSTCLAUDE["claude\nstock provider\nruns on the host"]
 
         subgraph dc["docker compose - paseo-hub.service"]
@@ -115,16 +114,26 @@ you to authenticate. The resulting token is cached in
 
 ## Usage
 
+Create and provision the VM. The VM name is prompted for on the first run and
+cached, so afterwards this is the whole command:
+
 ```bash
-uv run devbox.py <user>/<repo> [--prefix <prefix>]
+uv run devbox.py provision [--vm-name <name>]
 ```
 
-This creates the exe.dev GitHub integration and VM if they don't already
-exist, and provisions the VM via pyinfra.
+Then enable a GitHub repo as a Paseo project — once per repo:
 
-Once it finishes, drive the box through Paseo (see below) — pair a client with
-the daemon, or open the Hub dashboard. For a shell, plain `ssh
-<prefix>-<repo>.exe.xyz` still works.
+```bash
+uv run devbox.py add-repo <user>/<repo>
+```
+
+That creates the exe.dev GitHub integration for the repo, attaches it to the VM,
+and registers the clone as a Paseo workspace under `~/projects`. The VM itself is
+not tied to any repo; add as many as you like.
+
+Once provisioning finishes, drive the box through Paseo (see below) — pair a
+client with the daemon, or open the Hub dashboard. For a shell, plain
+`ssh <vm-name>.exe.xyz` still works.
 
 ## Paseo
 
@@ -246,7 +255,10 @@ the devbox's loopback reachable from a guest. It's a raw TCP forward, so TLS and
 certificate validation pass through untouched. The guest entrypoint then points
 the hostname at that loopback, and `GH_HOST` is baked into the agent image.
 
-**When adding a project in Paseo, use the integration URL**, not a github.com one:
+This is why repos are added with `uv run devbox.py add-repo <user>/<repo>` rather
+than through the Paseo UI: the repo needs an exe.dev integration first, and the
+clone has to use the integration URL rather than github.com. If you do add one by
+hand, use:
 
 ```
 https://github.int.exe.xyz/<user>/<repo>.git
@@ -269,17 +281,17 @@ to Hub and redirects everything else back to the tailnet URL, so the dashboard
 never answers publicly. Nothing is internet-reachable until you opt in:
 
 ```bash
-ssh exe.dev share port <prefix>-<repo> 8080
-ssh exe.dev share set-public <prefix>-<repo>
+ssh exe.dev share port <vm-name> 8080
+ssh exe.dev share set-public <vm-name>
 ```
 
 Then set the GitHub App's webhook URL to
-`https://<prefix>-<repo>.exe.xyz/webhook`, with the secret matching
+`https://<vm-name>.exe.xyz/webhook`, with the secret matching
 `GITHUB_WEBHOOK_SECRET` in `~/.config/paseo-hub/hub.env`. Revert exposure with
-`ssh exe.dev share set-private <prefix>-<repo>`.
+`ssh exe.dev share set-private <vm-name>`.
 
 ## Config
 
-Per-repo config is cached under `.devbox/` (gitignored) in the current
-directory, so re-running `uv run devbox.py <user>/<repo>` picks up the same
-prefix and settings without prompting again.
+Everything lives in `~/.config/devbox/config.toml` (mode 0600): the VM name, the
+Tailscale credentials, the Hub owner login, and the cached Claude token. Missing
+values are prompted for on first use and reused thereafter.

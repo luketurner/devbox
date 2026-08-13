@@ -10,14 +10,6 @@ BASHRC = f"{HOME}/.bashrc"
 # files.put resolves relative srcs against the CWD, not this file — be explicit.
 FILES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "files")
 
-# --- OS packages -------------------------------------------------------------
-apt.packages(
-    name="Install base tools",
-    packages=["fd-find"],
-    update=True,
-    _sudo=True,
-)
-
 # --- node via NodeSource -----------------------------------------------------
 # Ubuntu's own nodejs is 18.x (EOL). Guarded on the sources file so a re-deploy
 # doesn't re-run the setup script.
@@ -241,15 +233,6 @@ server.shell(
         "systemctl --user daemon-reload && "
         "systemctl --user enable --now paseo-hub.service"
     ],
-)
-
-# --- GitHub repo clone (idempotent) -----------------------------------------
-# The reflection endpoint names the attached github integration = repo dir.
-git.repo(
-    name="Clone the target repo",
-    src=f"https://github.int.exe.xyz/{data.repo}.git",
-    dest=f"{HOME}/{data.repo}",
-    _env={"GH_HOST": "github.int.exe.xyz"},
 )
 
 # --- Claude token persisted (secret on VM, by design) -----------------------
