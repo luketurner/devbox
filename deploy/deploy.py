@@ -156,6 +156,28 @@ server.shell(
     commands=["usermod -aG kvm exedev"],
     _sudo=True,
 )
+# Supplementary groups are fixed when a process starts, so the systemd user
+# manager -- and the paseo daemon and microVMs it spawns -- keep whatever
+# groups they had at boot. The usermod above therefore does nothing for them
+# until the manager restarts, which is why a claude-vm session fails with
+# "Cannot access /dev/kvm" long after the deploy reported success.
+#
+# Checking /etc/group is not enough: it lists kvm the moment usermod runs,
+# while the running manager is still stale. Compare against the manager's
+# actual group set, so a re-provision doesn't needlessly bounce live agents.
+server.shell(
+    name="Restart user manager if it predates the kvm group",
+    commands=[
+        'KVM_GID="$(getent group kvm | cut -d: -f3)"; '
+        'UID_N="$(id -u exedev)"; '
+        'MPID="$(systemctl show "user@${UID_N}.service" -p MainPID --value)"; '
+        'if [ -z "$MPID" ] || [ "$MPID" = "0" ] || '
+        '! grep "^Groups:" "/proc/$MPID/status" | tr " " "\\n" '
+        '| grep -qx "$KVM_GID"; then '
+        'systemctl restart "user@${UID_N}.service"; sleep 5; fi'
+    ],
+    _sudo=True,
+)
 files.put(
     name="Install agent image Dockerfile",
     src=f"{FILES}/paseo-agent.Dockerfile",
