@@ -2,16 +2,28 @@
 # Entrypoint for the agent guest image.
 #
 # The exe.dev GitHub integration is served on a link-local address the guest
-# cannot route to. The devbox forwards it on its own loopback, which smolvm's
-# TSI backend makes reachable as 127.0.0.1 in here, so point the documented
-# hostname at that. /etc/hosts is regenerated per boot, hence doing it here
-# rather than baking it into an image layer.
+# cannot route to. The devbox forwards it on its own loopback; how to reach
+# that loopback depends on which network backend smolvm picked, and passing
+# --port switches it:
+#
+#   * virtio-net (port forwarding on): the guest gets a real NIC behind a NAT,
+#     and the default gateway is the host. Its 127.0.0.1 is its own.
+#   * TSI (no port forwarding): socket calls are impersonated on the host, so
+#     the guest's 127.0.0.1 already *is* the host's.
+#
+# Deriving it from the routing table covers both without the wrapper having to
+# tell us which one is in play.
+HOST_ADDR="$(ip route 2>/dev/null | awk '/^default/ {print $3; exit}')"
+[ -n "$HOST_ADDR" ] || HOST_ADDR=127.0.0.1
+
+# /etc/hosts is regenerated per boot, hence doing this here rather than baking
+# it into an image layer.
 # The guest boots without an /etc/hosts at all, so seed the usual entries
 # rather than leaving a file containing only the line below.
 [ -f /etc/hosts ] || printf '127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost\n' > /etc/hosts
 
 grep -q github.int.exe.xyz /etc/hosts 2>/dev/null \
-    || echo "127.0.0.1 github.int.exe.xyz" >> /etc/hosts
+    || echo "$HOST_ADDR github.int.exe.xyz" >> /etc/hosts
 
 # Argv-transparent: Paseo appends the adapter's per-session arguments.
 exec claude "$@"

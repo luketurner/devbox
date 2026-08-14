@@ -11,6 +11,8 @@ RUN apt-get update \
         curl \
         gh \
         git \
+        # agent-entry reads the default gateway to find the devbox.
+        iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Route gh through the exe.dev integration rather than github.com. Constant, so

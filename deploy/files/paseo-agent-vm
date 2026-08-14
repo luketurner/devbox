@@ -65,9 +65,18 @@ reap_orphans() {
 }
 reap_orphans
 
+# Forward only the ports actually free right now. They are fixed host ports, so
+# a second concurrent session -- or a stray VM the sweep above left alone
+# because it is legitimately running -- would otherwise fail the whole launch
+# with "virtio-net: Address already in use". Losing a forward is a far smaller
+# loss than losing the agent.
 port_args=""
 for p in $PORTS; do
-    port_args="$port_args -p $p:$p"
+    if ss -ltnH 2>/dev/null | awk '{print $4}' | sed 's/.*://' | grep -qx "$p"; then
+        echo "paseo-agent-vm: port $p is in use; not forwarding it" >&2
+    else
+        port_args="$port_args -p $p:$p"
+    fi
 done
 
 # --cpus/--mem are required, not tuning: smolvm defaults to 4 vCPU / 8192 MiB
