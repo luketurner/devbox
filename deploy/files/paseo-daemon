@@ -20,4 +20,8 @@ TS_IP="$(tailscale ip -4 | head -n1)"
 export PASEO_LISTEN="${TS_IP}:6767"
 export PASEO_HOSTNAMES="${TS_IP},$(hostname)"
 
-exec paseo daemon start --web-ui --no-relay
+# --foreground is load-bearing: without it `paseo daemon start` forks a child
+# and returns 0, so systemd sees the Type=simple main process exit cleanly,
+# marks the unit dead, and never restarts it because nothing "failed". The
+# daemon it forked is then unsupervised and dies with the cgroup.
+exec paseo daemon start --foreground --web-ui --no-relay
