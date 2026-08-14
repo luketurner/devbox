@@ -94,6 +94,19 @@ server.shell(
         "systemctl --user enable --now paseo.service"
     ],
 )
+# Type=simple means `enable --now` returns success the moment systemd forks, so
+# an ExecStart that dies immediately -- a bad interpreter, a missing binary --
+# is reported as a successful deploy and only shows up later as a daemon that
+# isn't listening. Check it actually stayed up, and print why if it didn't.
+server.shell(
+    name="Verify paseo daemon is running",
+    commands=[
+        "export XDG_RUNTIME_DIR=/run/user/$(id -u) && sleep 5 && "
+        "systemctl --user is-active --quiet paseo.service || { "
+        "systemctl --user status paseo.service --no-pager -l | tail -n 20; "
+        "exit 1; }"
+    ],
+)
 
 # --- exe.dev GitHub integration reachable from microVMs ---------------------
 # The integration is served on a link-local address a guest cannot route to,
@@ -111,7 +124,11 @@ server.shell(
     name="Enable and start github proxy",
     commands=[
         "systemctl daemon-reload && "
-        "systemctl enable --now paseo-github-proxy.service"
+        "systemctl enable --now paseo-github-proxy.service && "
+        # Same Type=simple caveat as the daemon above: verify it stayed up.
+        "sleep 3 && { systemctl is-active --quiet paseo-github-proxy.service || { "
+        "systemctl status paseo-github-proxy.service --no-pager -l | tail -n 20; "
+        "exit 1; }; }"
     ],
     _sudo=True,
 )
