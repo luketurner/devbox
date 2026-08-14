@@ -143,6 +143,24 @@ Once provisioning finishes, drive the box through Paseo (see below) — pair a
 client with the daemon, or open the Hub dashboard. For a shell, plain
 `ssh <vm-name>.exe.xyz` still works.
 
+### If provisioning drops mid-run
+
+Long connections through the exe.dev proxy sometimes die part-way, showing up as
+`Command socket/SSH error: SSHException('Channel closed.')`. The deploy is
+idempotent and retries on two levels — pyinfra re-runs the failed operation, and
+the whole run is retried up to three times with a fresh connection — so this
+usually recovers by itself.
+
+pyinfra honours `ServerAliveInterval` from your SSH config, which keeps an idle
+connection from being dropped in the first place. Worth adding to
+`~/.ssh/config`:
+
+```
+Host *.exe.xyz
+    ServerAliveInterval 30
+    ServerAliveCountMax 6
+```
+
 ## Paseo
 
 The [paseo](https://paseo.sh) daemon autostarts as a systemd user service, bound

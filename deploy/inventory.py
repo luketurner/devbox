@@ -14,6 +14,8 @@ hosts = [
             # Let paramiko use the user's ssh config and trust first-seen keys,
             # matching the manual `ssh <name>.exe.xyz` flow.
             "ssh_strict_host_key_checking": "accept-new",
+            # The initial connect races VM boot and the exe.dev proxy.
+            "ssh_connect_retries": 5,
         },
     )
 ]
