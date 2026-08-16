@@ -24,6 +24,16 @@ ENV GH_HOST=github.int.exe.xyz
 RUN curl -fsSL https://claude.ai/install.sh | bash
 ENV PATH="/root/.local/bin:$PATH"
 
+# Paseo drives the agent in bypassPermissions mode, and Claude Code exits 1 with
+# "--dangerously-skip-permissions cannot be used with root/sudo privileges" when
+# it finds uid 0. The guard is aimed at a real workstation, where bypassing
+# permissions as root puts the whole machine at stake; here the machine is a
+# microVM with nothing mounted but the session's workspace, rebuilt from the
+# image after every session. IS_SANDBOX is the escape hatch it checks for that
+# case, and it also stops Claude Code enabling its own nested sandbox, which
+# would be redundant inside a VM.
+ENV IS_SANDBOX=1
+
 # Plugins are baked in rather than installed on the devbox: the microVM mounts
 # only the workspace, so the host's ~/.claude is invisible in here. Tolerant of
 # failure, matching how these were installed host-side — a flaky marketplace

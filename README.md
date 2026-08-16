@@ -260,6 +260,16 @@ the microVM mounts only the workspace and so can't see the host's `~/.claude`.
 Don't be tempted to mount that directory in: it also holds
 `.credentials.json`.
 
+Everything in the guest runs as root, and Paseo drives the agent in
+`bypassPermissions` mode — a combination Claude Code refuses outright, exiting 1
+with `--dangerously-skip-permissions cannot be used with root/sudo privileges`.
+The image sets `IS_SANDBOX=1`, the escape hatch that guard checks for, because
+what the guard protects doesn't exist here: the machine at stake is a microVM
+containing nothing but the session's workspace, thrown away after every session.
+Guest root doesn't reach the host either — smolvm shares files as the
+unprivileged devbox user, so a file the agent creates in the workspace lands
+owned by `exedev`, not `root`.
+
 To add a dependency, edit the Dockerfile and re-run the deploy. The build is
 guarded on a hash of the Dockerfile, the entrypoint and the build script itself,
 so an edit to any of them triggers a rebuild — and a rebuild restocks the pool,
