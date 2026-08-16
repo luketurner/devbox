@@ -43,8 +43,8 @@ graph TB
             PG["Postgres 17\nnot published"]
         end
 
-        subgraph mvm["smolvm microVM - ephemeral, per session"]
-            VMCLAUDE["claude\nclaude-vm provider\n2 vCPU / 3 GiB"]
+        subgraph mvm["smolvm microVM - pooled, recycled per session"]
+            VMCLAUDE["claude\nclaude-vm provider\n2 vCPU / 2 GiB"]
         end
     end
 
@@ -76,7 +76,7 @@ Three boundaries are worth reading off that diagram:
   `ssh exe.dev share set-public`: `POST /webhook`. The Caddy container redirects everything else
   back to the tailnet, so the Hub UI never answers publicly.
 - **Agents are sandboxed only on the `claude-vm` path.** There the agent gets its own kernel and
-  sees just the mounted workspace. The stock `claude` provider still runs on the host with your
+  sees just the mounted workspace and its git dir. The stock `claude` provider runs on the host with your
   credentials — that's the fallback, kept deliberately.
 
 ## Prerequisites
@@ -201,19 +201,52 @@ credentials and the whole box in reach. The deploy adds a second provider,
 **Claude (microVM)**, selectable per session; the stock `claude` provider is left
 untouched, so a broken sandbox never blocks you.
 
-Picking it runs the agent inside an ephemeral [smolvm](https://github.com/smol-machines/smolvm)
-microVM via `~/.local/bin/paseo-agent-vm`. Only the workspace directory is
-mounted, at the same path inside and out. The agent gets a separate kernel: no
-`~/.ssh`, no `~/.config/devbox.env`, no `~/.paseo`, no Hub Postgres, no tailnet
-interface, no docker socket.
+Picking it runs the agent inside a [smolvm](https://github.com/smol-machines/smolvm)
+microVM via `~/.local/bin/paseo-agent-vm`. Only the workspace directory and the
+git directory backing it are mounted, at the same paths inside and out. The agent
+gets a separate kernel: no `~/.ssh`, no `~/.config/devbox.env`, no `~/.paseo`, no
+Hub Postgres, no tailnet interface, no docker socket.
 
 Two things deliberately still cross the boundary. `CLAUDE_CODE_OAUTH_TOKEN` is
 passed in, because the agent has to authenticate. And egress is unrestricted
 (`--net`), so the boundary is filesystem and credential isolation, not network
 containment — smolvm's `--allow-host` is the lever if you want to tighten that.
 
-The VM is capped at 2 vCPU / 3 GiB (smolvm defaults to 4 vCPU / 8 GiB, more than
-this box has), so expect one sandboxed session at a time alongside Hub.
+Each VM is capped at 2 vCPU / 2 GiB and there are two of them, so at most two
+sandboxed sessions run at once alongside Hub and Postgres. A third is refused
+with a message rather than left to the OOM killer.
+
+#### Why a pool
+
+Paseo aborts agent start after 15s — `AGENT_RUN_START_TIMEOUT_MS`, hardcoded in
+`@getpaseo/server` with no config or environment override — and surfaces nothing
+but `timeout`. Booting a microVM from scratch does not fit inside that: smolvm
+re-flattens the image inside the guest on *every* boot, which measured **16.3s on
+an idle box** and far worse under load.
+
+That is not a delivery-mechanism problem. Measured here:
+
+| launch path | time to run a command in the guest |
+| --- | --- |
+| `machine run --image <docker save tar>` | 16.3s |
+| `machine run --from <packed .smolmachine>` | 26.1s |
+| `machine run --oci-cache` (warm cache) | 25.7s |
+| **`machine start` on a pre-flattened machine** | **1.6s** |
+
+The packed and cached paths are *slower*, because rehydrating a compressed
+artifact costs more CPU than flattening the archive. (`--oci-cache` also prints
+its status line to stdout, which would corrupt the agent's protocol stream.)
+Shrinking the image cannot close the gap either — 324MB of it is the single
+`claude` binary.
+
+So the deploy pre-builds a small pool of machines that have already paid the
+flatten. A session claims one, has its workspace mounted in while the machine is
+stopped — `machine exec` has no `--volume`, so mounts are swapped between runs —
+and starts it.
+
+To keep the freshness an ephemeral VM would have given, a used machine is
+destroyed and rebuilt **after** the session ends, in the background and off the
+critical path. A claimed machine therefore always has a clean root filesystem.
 
 #### The guest image
 
@@ -228,11 +261,16 @@ Don't be tempted to mount that directory in: it also holds
 `.credentials.json`.
 
 To add a dependency, edit the Dockerfile and re-run the deploy. The build is
-guarded on a hash of the Dockerfile, so an edit does trigger a rebuild:
+guarded on a hash of the Dockerfile, the entrypoint and the build script itself,
+so an edit to any of them triggers a rebuild — and a rebuild restocks the pool,
+since stale machines would still be running the old image:
 
 ```bash
 ~/.local/bin/paseo-agent-build     # prints "rebuilt" or "unchanged"
 ```
+
+Expect a few minutes: it rebuilds the image and then boots each pool machine once
+to pay the flatten up front.
 
 For per-project setup, smolvm also reads a `Smolfile` (TOML) with `init`
 commands whose results are cached into a reusable artifact — a better fit than
@@ -253,21 +291,31 @@ returns 404. Ports are fixed when the VM starts, so point your dev server at one
 of the three above. `3000`, `6767` and `8080` are deliberately not in the list —
 Hub, the daemon and the webhook filter already hold those on the tailnet.
 
-#### VM cleanup
+#### Pool lifecycle and cleanup
 
-smolvm runs the VM as `smolvm-bin _boot-vm` in its own process group, so it does
-not die with its launcher. Left alone, a killed session strands a microVM that
-keeps holding the forwarded ports, and the next session fails to start. The
-wrapper handles both cases:
+The pool is `paseo-agent-1` and `paseo-agent-2` — visible in `smolvm machine ls`.
+A session:
 
-- **SIGTERM/HUP/INT** — a trap stops the launcher and the VM before exiting.
-- **SIGKILL** — nothing can run, so the next launch sweeps first. It kills any
-  `_boot-vm` under `~/.cache/smolvm/vms/` that has been reparented to init (or
-  whose launcher has), then *waits for it to exit* — `kill -9` is asynchronous
-  and the dying VM holds its ports long enough to lose the race otherwise.
+1. claims a machine with an atomic lock file under `~/.cache/paseo-agent-vm/`;
+2. mounts its workspace and git dir into the stopped machine, then starts it;
+3. runs the agent with `machine exec -i`, passing the token via `--secret-env` so
+   it reaches neither the machine record nor `ps` output;
+4. on exit, stops the machine and rebuilds it in the background — releasing the
+   lock only once the replacement is ready, so a half-built machine is never
+   claimable.
 
-If you ever run a detached machine deliberately (`machine run -d`), note the
-sweep only matches the ephemeral cache path, so named machines are left alone.
+Two failure modes are handled explicitly:
+
+- **SIGTERM/HUP/INT** — forwarded to the exec, then the machine is stopped and
+  recycled as normal.
+- **SIGKILL** — nothing can run, so the lock is left behind. It records the owning
+  PID, and the next session reclaims any lock whose process is gone.
+
+A machine that comes back with mounts still attached is refused and recycled
+rather than reused, so one session's workspace can never show up in the next.
+
+Background rebuilds log to `~/.cache/paseo-agent-vm/recycle.log`. If the pool is
+ever lost entirely, `~/.local/bin/paseo-agent-build` restocks it.
 
 ### GitHub access
 

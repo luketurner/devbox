@@ -1,115 +1,379 @@
-#!/bin/sh
-# Launch a Paseo agent inside an ephemeral smolvm microVM.
-#
-# Paseo's resolveProviderLaunch treats a configured `command` as the binary
-# plus a *prefix* of the argv and appends the adapter's own per-session
-# arguments (--resume=<uuid>, --model, --settings {...}) after it. So this
-# wrapper must be argv-transparent: forward "$@" verbatim to claude.
-#
-# There is no ${workspace} placeholder in Paseo's provider config, but the
-# agent is spawned with cwd set to the workspace, so $PWD is how we learn
-# what to mount.
-set -e
+#!/usr/bin/env python3
+"""Launch a Paseo agent inside a sandboxed smolvm microVM.
 
-SMOLVM="$HOME/.smolvm/smolvm"
-IMAGE="$HOME/.local/share/paseo-agent.tar"
+Paseo's resolveProviderLaunch treats a configured `command` as the binary plus a
+*prefix* of the argv and appends the adapter's own per-session arguments
+(--resume=<uuid>, --model, --settings {...}) after it. So this wrapper must be
+argv-transparent: forward argv verbatim to the guest.
 
-# Dev-server ports forwarded out of the VM. smolvm only ever binds these on
-# the host's 127.0.0.1 (it rejects an IP in the spec), so `tailscale serve`
-# republishes them onto the tailnet — see the README.
+There is no ${workspace} placeholder in Paseo's provider config, but the agent is
+spawned with cwd set to the workspace, so os.getcwd() is how we learn what to
+mount.
+
+Why a pool rather than a fresh ephemeral VM per session
+-------------------------------------------------------
+Paseo aborts agent start after AGENT_RUN_START_TIMEOUT_MS = 15000 -- a hardcoded
+constant in @getpaseo/server with no config or env override -- and surfaces the
+failure as a bare "timeout". A `machine run` boots in 16.3s here even on an idle
+box, because smolvm re-flattens the image inside the guest on every boot. That is
+not fixable by changing how the image is delivered: a packed .smolmachine measured
+26.1s and --oci-cache 25.7s (which also writes progress to stdout, corrupting the
+protocol stream). Nor by shrinking the image -- 324MB of it is the single claude
+binary.
+
+A machine that has already been flattened once starts in ~1.6s and execs in well
+under a second, which fits the budget with room to spare. So we keep a small pool
+of pre-flattened machines, claim one per session, and mount only that session's
+workspace into it. `machine exec` has no --volume, so mounts are swapped while the
+machine is stopped -- which is instant.
+
+To keep the per-session freshness an ephemeral VM would have given, a used machine
+is destroyed and rebuilt in the background *after* the session ends, off the
+critical path. A claimed machine is therefore always a fresh rootfs.
+"""
+
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+
+HOME = os.path.expanduser("~")
+SMOLVM = os.path.join(HOME, ".smolvm/smolvm")
+IMAGE = os.path.join(HOME, ".local/share/paseo-agent.tar")
+VERSION_FILE = os.path.join(HOME, ".local/share/paseo-agent.version")
+STATE_DIR = os.path.join(HOME, ".cache/paseo-agent-vm")
+RECYCLE_LOG = os.path.join(STATE_DIR, "recycle.log")
+
+# One machine per concurrent session. Two fit alongside Hub, Postgres and the
+# daemon on a 2 vCPU / 8 GiB box; past that the OOM killer decides, and it has
+# already killed a running microVM here once.
+POOL = ["paseo-agent-1", "paseo-agent-2"]
+CPUS = "2"
+MEM = "2048"
+
+# Dev-server ports forwarded out of the VM. smolvm only ever binds these on the
+# host's 127.0.0.1 (it rejects an IP in the spec), so `tailscale serve`
+# republishes them onto the tailnet -- see the README.
 #
 # 3000 is deliberately absent: Hub already owns it on the tailnet. Run a dev
 # server on one of these instead. 8080 is likewise taken, by the Caddy filter.
-PORTS="5173 8000 8081"
+PORTS = ["5173", "8000", "8081"]
 
-# The daemon already exports this (its own wrapper sources devbox.env and
-# children inherit), but source it too so the wrapper works when run by hand.
-[ -f "$HOME/.config/devbox.env" ] && . "$HOME/.config/devbox.env"
 
-# smolvm runs the VM as `smolvm-bin _boot-vm` in its OWN process group, so it
-# does not die with its launcher: a SIGKILLed wrapper leaves the microVM
-# running, reparented to init, still holding the forwarded ports the next
-# session needs. Two defences follow — a trap for SIGTERM, and this sweep for
-# anything a previous SIGKILL already stranded. Matching on the ephemeral
-# cache path avoids touching a machine someone detached on purpose.
-#
-# A SIGKILLed wrapper strands the launcher too, so there are two shapes to
-# catch: a VM reparented to init, or a live VM whose launcher was reparented.
-# Restricting the match to the ephemeral cache path keeps this away from any
-# machine someone detached deliberately.
-reap_orphans() {
-    killed=""
-    for vm in $(pgrep -f 'smolvm-bin _boot-vm .*/\.cache/smolvm/vms/' 2>/dev/null); do
-        parent="$(ps -o ppid= -p "$vm" 2>/dev/null | tr -d ' ')"
-        if [ "$parent" = "1" ]; then
-            kill -9 "$vm" 2>/dev/null || true
-            killed="$killed $vm"
-        elif [ "$(ps -o ppid= -p "$parent" 2>/dev/null | tr -d ' ')" = "1" ]; then
-            kill -9 "$vm" "$parent" 2>/dev/null || true
-            killed="$killed $vm $parent"
-        fi
-    done
-    [ -n "$killed" ] || return 0
+def log(msg):
+    print("paseo-agent-vm: %s" % msg, file=sys.stderr)
 
-    # kill -9 is asynchronous and a dying VM holds its forwarded ports until it
-    # actually exits, so without this the new VM races it and dies with
-    # "virtio-net: Address already in use".
-    i=0
-    while [ "$i" -lt 15 ]; do
-        alive=0
-        for p in $killed; do kill -0 "$p" 2>/dev/null && alive=1; done
-        [ "$alive" = "0" ] && return 0
-        i=$((i + 1))
-        sleep 1
-    done
-}
-reap_orphans
 
-# Forward only the ports actually free right now. They are fixed host ports, so
-# a second concurrent session -- or a stray VM the sweep above left alone
-# because it is legitimately running -- would otherwise fail the whole launch
-# with "virtio-net: Address already in use". Losing a forward is a far smaller
-# loss than losing the agent.
-port_args=""
-for p in $PORTS; do
-    if ss -ltnH 2>/dev/null | awk '{print $4}' | sed 's/.*://' | grep -qx "$p"; then
-        echo "paseo-agent-vm: port $p is in use; not forwarding it" >&2
-    else
-        port_args="$port_args -p $p:$p"
-    fi
-done
+def smolvm(*args, **kwargs):
+    return subprocess.run([SMOLVM, *args], **kwargs)
 
-# --cpus/--mem are required, not tuning: smolvm defaults to 4 vCPU / 8192 MiB
-# and this box has 2 vCPU / 7 GiB total with Hub and Postgres already resident.
-#
-# -i without -t is deliberate: it keeps stdin open as a pipe, where -t would
-# allocate a PTY and mangle the protocol stream.
-#
-# Not exec'd, so this shell survives to clean up after the VM.
-"$SMOLVM" machine run -i \
-    --image "$IMAGE" \
-    --volume "$PWD:$PWD" \
-    --workdir "$PWD" \
-    --cpus 2 \
-    --mem 3072 \
-    --net \
-    $port_args \
-    --env "CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN" \
-    -- agent-entry "$@" &
-LAUNCHER=$!
 
-# The VM is a child of the launcher while the launcher lives, which is the only
-# window in which we can find it by PID.
-stop_vm() {
-    vm="$(pgrep -P "$LAUNCHER" -f '_boot-vm' 2>/dev/null)"
-    kill "$LAUNCHER" 2>/dev/null || true
-    for p in $vm; do kill "$p" 2>/dev/null || true; done
-}
-trap 'stop_vm; exit 143' TERM INT HUP
+def answer_metadata_probes(argv):
+    """Answer Paseo's provider probes on the host, without booting anything.
 
-set +e
-wait "$LAUNCHER"
-status=$?
-set -e
-stop_vm
-exit "$status"
+    Paseo probes with `<command> --version` and `<command> auth status`, each on a
+    hard 5s budget (resolveClaudeCodeVersion / resolveClaudeAuth). No microVM
+    starts that fast, so before this shortcut every probe failed *and* left a VM
+    churning long after Paseo gave up -- which is what buried this box under
+    concurrent VMs until the OOM killer stepped in.
+
+    Matching the whole argv is what makes this safe: Paseo launches a real session
+    as `--input-format stream-json ... --resume=<uuid>`, so it can never collide.
+    """
+    if argv == ["--version"]:
+        try:
+            with open(VERSION_FILE) as fh:
+                sys.stdout.write(fh.read())
+        except OSError:
+            log("%s is missing; run paseo-agent-build" % VERSION_FILE)
+            return 1
+        return 0
+    if argv == ["auth", "status"]:
+        print(
+            "Sandboxed provider: the guest authenticates with the "
+            "CLAUDE_CODE_OAUTH_TOKEN injected at launch."
+        )
+        return 0
+    return None
+
+
+def check_workspace(workspace):
+    """Refuse a cwd that would mount far more than a workspace.
+
+    os.getcwd() is simply whatever we were handed. For a session that is the
+    workspace, but a version probe ran from the daemon's own cwd and mounted the
+    entire home directory -- ~/.ssh and devbox.env included.
+    """
+    if workspace in ("", "/", HOME):
+        log("refusing to mount %r as a workspace" % workspace)
+        return False
+    if (HOME + "/").startswith(workspace.rstrip("/") + "/"):
+        log("refusing to mount %r, which contains $HOME" % workspace)
+        return False
+    return True
+
+
+def git_common_dir(workspace):
+    """Resolve the git directory that actually backs this workspace.
+
+    Paseo runs agents in git worktrees, whose .git is a *file* reading
+    `gitdir: <mainrepo>/.git/worktrees/<name>`. Mounting only the workspace leaves
+    that pointer dangling, and every git command in the guest fails with
+    "fatal: not a git repository" -- verified in a guest before this fix.
+
+    rev-parse reports the path absolute for a worktree but as a bare ".git" for a
+    plain clone; once resolved, a plain clone's git dir is already inside the
+    workspace and needs no second mount.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", workspace, "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    path = out.stdout.strip()
+    if not path:
+        return None
+    if not os.path.isabs(path):
+        path = os.path.normpath(os.path.join(workspace, path))
+    if not os.path.isdir(path):
+        return None
+    if path.startswith(workspace.rstrip("/") + "/"):
+        return None
+    return path
+
+
+def free_ports():
+    """Forward only the ports actually free right now.
+
+    They are fixed host ports, so a second concurrent session would otherwise fail
+    the whole launch with "virtio-net: Address already in use". Losing a forward is
+    a far smaller loss than losing the agent.
+
+    Only a loopback or wildcard listener actually collides, because that is all
+    smolvm binds. An earlier check compared bare port numbers, which also matched
+    `tailscale serve`'s listeners on the tailnet address -- so every port looked
+    permanently busy and port forwarding was silently disabled altogether.
+    """
+    try:
+        out = subprocess.run(["ss", "-ltnH"], capture_output=True, text=True, timeout=10)
+        listening = {line.split()[3] for line in out.stdout.splitlines() if len(line.split()) > 3}
+    except (OSError, subprocess.SubprocessError, IndexError):
+        return []
+    local = ("127.0.0.1", "0.0.0.0", "*", "[::]", "[::1]")
+    out_ports = []
+    for port in PORTS:
+        if any("%s:%s" % (host, port) in listening for host in local):
+            log("port %s is in use; not forwarding it" % port)
+        else:
+            out_ports.append(port)
+    return out_ports
+
+
+def machines():
+    try:
+        out = smolvm("machine", "ls", "--json", capture_output=True, text=True, timeout=30)
+        return {m["name"]: m for m in json.loads(out.stdout)}
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError):
+        return {}
+
+
+def claim():
+    """Take exclusive ownership of one pool machine.
+
+    O_CREAT|O_EXCL is the atomic part. A lock whose owning PID is gone is stale --
+    a SIGKILLed wrapper cannot release its own lock -- so reclaim it.
+    """
+    os.makedirs(STATE_DIR, exist_ok=True)
+    for name in POOL:
+        lock = os.path.join(STATE_DIR, name + ".lock")
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            if not lock_is_stale(lock):
+                continue
+            try:
+                os.unlink(lock)
+                fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            except OSError:
+                continue
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        return name, lock
+    return None, None
+
+
+def lock_is_stale(lock):
+    try:
+        with open(lock) as fh:
+            pid = int(fh.read().strip())
+    except (OSError, ValueError):
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    return False
+
+
+def prepare(name, workspace, gitdir):
+    """Point a stopped pool machine at this session's workspace and start it."""
+    info = machines().get(name)
+    if info is None:
+        log("pool machine %s does not exist; run paseo-agent-build" % name)
+        return False
+    if info.get("state") == "running":
+        smolvm("machine", "stop", "--name", name, capture_output=True, timeout=120)
+    # Only now are this machine's own forwards released, so a machine stranded by
+    # a SIGKILLed session does not make its ports look permanently taken.
+    ports = free_ports()
+    if info.get("mounts"):
+        # Recycling should hand us a machine with no mounts. If it did not, the
+        # previous session's workspace would still be visible, so refuse rather
+        # than leak it across sessions.
+        log("pool machine %s has stale mounts; recycling instead of reusing" % name)
+        return False
+
+    update = ["machine", "update", "--name", name,
+              "--volume", "%s:%s" % (workspace, workspace),
+              "--cpus", CPUS, "--mem", MEM, "--net"]
+    if gitdir:
+        update += ["--volume", "%s:%s" % (gitdir, gitdir)]
+    for port in ports:
+        update += ["--port", "%s:%s" % (port, port)]
+    if smolvm(*update, capture_output=True, timeout=60).returncode != 0:
+        log("could not configure pool machine %s" % name)
+        return False
+
+    started = smolvm("machine", "start", "--name", name, capture_output=True, text=True, timeout=300)
+    if started.returncode != 0:
+        log("could not start pool machine %s: %s" % (name, started.stderr.strip()[:200]))
+        return False
+
+    # `machine start` can return before the guest container actually accepts
+    # execs -- observed when a background rebuild was competing for this box's
+    # two cores. Poll for readiness instead of letting the session's first exec
+    # die with "the container ... is not running", which would surface to Paseo
+    # as the same opaque failure this whole change exists to remove.
+    for _ in range(20):
+        probe = smolvm("machine", "exec", "--name", name, "--", "/bin/true",
+                       capture_output=True, timeout=60)
+        if probe.returncode == 0:
+            return True
+        time.sleep(0.5)
+    log("pool machine %s started but never became ready" % name)
+    return False
+
+
+def recycle(name, lock):
+    """Destroy and rebuild a used machine, then release the lock.
+
+    Detached and off the critical path: the point of the pool is that the *next*
+    session finds an already-flattened machine, and rebuilding costs ~17s. Holding
+    the lock until the rebuild finishes is deliberate -- a half-built machine must
+    not be claimable.
+    """
+    script = (
+        '"$1" machine stop --name "$2" >/dev/null 2>&1;'
+        '"$1" machine delete --name "$2" -f >/dev/null 2>&1;'
+        '"$1" machine create --name "$2" --image "$3" --net --cpus "$4" --mem "$5" >/dev/null 2>&1 &&'
+        '"$1" machine start --name "$2" >/dev/null 2>&1 &&'
+        '"$1" machine stop --name "$2" >/dev/null 2>&1;'
+        'rm -f "$6"'
+    )
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(RECYCLE_LOG, "ab") as logfh:
+            subprocess.Popen(
+                ["/bin/sh", "-c", script, "sh", SMOLVM, name, IMAGE, CPUS, MEM, lock],
+                stdin=subprocess.DEVNULL, stdout=logfh, stderr=logfh,
+                start_new_session=True,
+            )
+    except OSError:
+        # Never strand the lock just because the rebuild could not be spawned.
+        try:
+            os.unlink(lock)
+        except OSError:
+            pass
+
+
+def main():
+    argv = sys.argv[1:]
+
+    probe = answer_metadata_probes(argv)
+    if probe is not None:
+        return probe
+
+    workspace = os.getcwd()
+    if not check_workspace(workspace):
+        return 1
+
+    # The daemon already exports this (its own wrapper sources devbox.env and
+    # children inherit), but read it too so the wrapper works when run by hand.
+    env_file = os.path.join(HOME, ".config/devbox.env")
+    if os.path.exists(env_file):
+        with open(env_file) as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith("export "):
+                    line = line[len("export "):]
+                if "=" in line and not line.startswith("#"):
+                    key, _, value = line.partition("=")
+                    os.environ.setdefault(key.strip(), value.strip().strip('"\''))
+
+    # A session killed with SIGKILL cannot clean up after itself, so it leaves its
+    # machine running with mounts still attached. That machine is unusable -- its
+    # previous workspace must not leak into this session -- but the rest of the
+    # pool is fine, so rebuild it and move on rather than failing the session.
+    # recycle() holds the lock until the replacement is ready, so the next claim()
+    # skips the machine being rebuilt and cannot loop on it.
+    gitdir = git_common_dir(workspace)
+    name = lock = None
+    for _ in range(len(POOL)):
+        candidate, candidate_lock = claim()
+        if candidate is None:
+            break
+        if prepare(candidate, workspace, gitdir):
+            name, lock = candidate, candidate_lock
+            break
+        recycle(candidate, candidate_lock)
+
+    if name is None:
+        log("no sandbox machine available (all busy, or being rebuilt)")
+        return 1
+
+    # --secret-env resolves from our environment at exec time and is never written
+    # to the machine record, unlike --env, which also put the token in `ps` output.
+    cmd = [SMOLVM, "machine", "exec", "-i", "--name", name, "--workdir", workspace,
+           "--secret-env", "CLAUDE_CODE_OAUTH_TOKEN=CLAUDE_CODE_OAUTH_TOKEN",
+           "--", "agent-entry", *argv]
+
+    # Inherit stdio untouched: this is the agent's protocol stream.
+    child = subprocess.Popen(cmd)
+
+    def forward(signum, _frame):
+        try:
+            child.send_signal(signum)
+        except ProcessLookupError:
+            pass
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, forward)
+
+    try:
+        status = child.wait()
+    finally:
+        smolvm("machine", "stop", "--name", name, capture_output=True, timeout=120)
+        recycle(name, lock)
+    return status
+
+
+if __name__ == "__main__":
+    sys.exit(main())

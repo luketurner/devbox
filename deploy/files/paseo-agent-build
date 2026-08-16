@@ -1,27 +1,65 @@
 #!/bin/sh
-# Build the agent guest image and save it as an OCI archive for smolvm.
+# Build the agent guest image and (re)stock the sandbox machine pool.
 #
-# Guarded on a hash of the Dockerfile rather than on the archive merely
-# existing: the previous check skipped the build whenever the tar was present,
+# Guarded on a hash of the build context rather than on the output merely
+# existing: an earlier check skipped the build whenever the archive was present,
 # so editing the Dockerfile silently changed nothing.
 set -e
 
 CONF="$HOME/.config/paseo-agent"
-IMAGE="$HOME/.local/share/paseo-agent.tar"
-STAMP="$HOME/.local/share/paseo-agent.sha256"
+SHARE="$HOME/.local/share"
+IMAGE="$SHARE/paseo-agent.tar"
+VERSION_FILE="$SHARE/paseo-agent.version"
+STAMP="$SHARE/paseo-agent.sha256"
+SMOLVM="$HOME/.smolvm/smolvm"
 
-# Hash the whole build context, not just the Dockerfile: agent-entry is COPYed
-# in, so a change to it must rebuild too.
-HASH="$(cat "$CONF"/Dockerfile "$CONF"/agent-entry 2>/dev/null | sha256sum | cut -d' ' -f1)"
+# Must match POOL in paseo-agent-vm.
+POOL="paseo-agent-1 paseo-agent-2"
+CPUS=2
+MEM=2048
 
-if [ -f "$IMAGE" ] && [ "$HASH" = "$(cat "$STAMP" 2>/dev/null)" ]; then
+# Hash the build context *and this script*: agent-entry is COPYed in, and how the
+# pool is built is as much a part of the result as the Dockerfile. Leaving this
+# script out would let a change to the pool logic leave stale machines in place.
+HASH="$(cat "$CONF"/Dockerfile "$CONF"/agent-entry "$0" 2>/dev/null | sha256sum | cut -d' ' -f1)"
+
+pool_ready() {
+    for m in $POOL; do
+        "$SMOLVM" machine status --name "$m" >/dev/null 2>&1 || return 1
+    done
+    return 0
+}
+
+if [ -f "$IMAGE" ] && [ -f "$VERSION_FILE" ] \
+    && [ "$HASH" = "$(cat "$STAMP" 2>/dev/null)" ] && pool_ready; then
     echo "unchanged"
     exit 0
 fi
 
 docker build -t paseo-agent:latest "$CONF"
-# A bare --image name is always a registry reference, so smolvm needs the
-# locally built image as an archive.
+
+# A bare --image name is always a registry reference, so smolvm needs the locally
+# built image as an archive.
 docker save paseo-agent:latest -o "$IMAGE"
+
+# The version Paseo reports for this provider. Captured here because the wrapper
+# answers `--version` on the host: booting a microVM cannot fit in Paseo's 5s
+# probe budget, and every probe that tried left a VM churning behind it.
+docker run --rm paseo-agent:latest claude --version > "$VERSION_FILE"
+
+# Stock the pool. The first start of each machine pays the one-time in-guest
+# image flatten (~15s); afterwards a session starts one in ~1.6s, which is what
+# keeps us inside Paseo's hardcoded 15s agent-start budget.
+for m in $POOL; do
+    "$SMOLVM" machine stop --name "$m" >/dev/null 2>&1 || true
+    "$SMOLVM" machine delete --name "$m" -f >/dev/null 2>&1 || true
+    "$SMOLVM" machine create --name "$m" --image "$IMAGE" --net --cpus "$CPUS" --mem "$MEM" >/dev/null
+    "$SMOLVM" machine start --name "$m" >/dev/null
+    "$SMOLVM" machine stop --name "$m" >/dev/null
+done
+
+# A lock left over from a killed session would make a rebuilt machine unclaimable.
+rm -f "$HOME/.cache/paseo-agent-vm"/*.lock 2>/dev/null || true
+
 echo "$HASH" > "$STAMP"
 echo "rebuilt"

@@ -32,8 +32,6 @@ ENV PATH="/root/.local/bin:$PATH"
 # fresh container, so add it explicitly alongside the third-party one.
 RUN claude plugin marketplace add obra/superpowers-marketplace || true
 RUN claude plugin marketplace add anthropics/claude-plugins-official || true
-COPY agent-entry /usr/local/bin/agent-entry
-RUN chmod +x /usr/local/bin/agent-entry
 
 RUN for plugin in \
         superpowers@superpowers-marketplace \
@@ -42,3 +40,13 @@ RUN for plugin in \
         superpowers-chrome@superpowers-marketplace \
         frontend-design@claude-plugins-official \
     ; do claude plugin install "$plugin" || true; done
+
+# The workspace and its git directory are mounted from the devbox, where they
+# belong to uid 1000, while everything in here runs as root. git calls that
+# "dubious ownership" and refuses the repo outright. The mounts are ours by
+# construction, so accept them rather than have every git command fail.
+RUN git config --system --add safe.directory '*'
+
+# Last, so editing the entrypoint doesn't invalidate the plugin layers above.
+COPY agent-entry /usr/local/bin/agent-entry
+RUN chmod +x /usr/local/bin/agent-entry
