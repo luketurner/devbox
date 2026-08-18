@@ -34,12 +34,16 @@ def build_pyinfra_args(deploy: str = DEPLOY) -> list[str]:
             "--retry-delay", str(OP_RETRY_DELAY)]
 
 
-def build_env(base: dict, *, host: str, ts_key: str,
-              claude_token: str) -> dict:
+def build_env(base: dict, *, host: str, ts_key: str, claude_token: str,
+              agent_pool_size: int, agent_memory: int) -> dict:
     env = dict(base)
     env["DEVBOX_HOST"] = host
     env["DEVBOX_TS_AUTHKEY"] = ts_key
     env["CLAUDE_CODE_OAUTH_TOKEN"] = claude_token
+    # Not secrets, but they travel the same way so the deploy has one source of
+    # host data. str() because the environment has no other type.
+    env["DEVBOX_AGENT_POOL_SIZE"] = str(agent_pool_size)
+    env["DEVBOX_AGENT_MEMORY"] = str(agent_memory)
     return env
 
 

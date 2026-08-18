@@ -13,19 +13,29 @@ VERSION_FILE="$SHARE/paseo-agent.version"
 STAMP="$SHARE/paseo-agent.sha256"
 SMOLVM="$HOME/.smolvm/smolvm"
 EGRESS_BIN="$HOME/.local/bin/paseo-agent-egress"
+POOL_CONF="$CONF/pool.env"
 
-# Must match POOL in paseo-agent-vm.
-POOL="paseo-agent-1 paseo-agent-2"
-CPUS=2
-MEM=2048
+# Pool geometry, shared with paseo-agent-vm rather than restated here -- the two
+# have to agree on machine names, and a comment asking them to is not a mechanism.
+# shellcheck source=/dev/null
+. "$POOL_CONF"
+
+POOL=""
+i=1
+while [ "$i" -le "$POOL_SIZE" ]; do
+    POOL="$POOL paseo-agent-$i"
+    i=$((i + 1))
+done
 
 # Hash the build context *and this script*: agent-entry is COPYed in, and how the
 # pool is built is as much a part of the result as the Dockerfile. Leaving this
 # script out would let a change to the pool logic leave stale machines in place.
 # The egress generator is hashed for the same reason: its output is baked into
 # each machine at create time, so tightening the policy has to force a rebuild
-# rather than print "unchanged" over a pool still running the old one.
-HASH="$(cat "$CONF"/Dockerfile "$CONF"/agent-entry "$0" "$EGRESS_BIN" 2>/dev/null | sha256sum | cut -d' ' -f1)"
+# rather than print "unchanged" over a pool still running the old one. pool.env
+# likewise: shrinking the pool or changing --mem leaves every existing machine
+# with the old geometry, which pool_ready() alone would happily call ready.
+HASH="$(cat "$CONF"/Dockerfile "$CONF"/agent-entry "$0" "$EGRESS_BIN" "$POOL_CONF" 2>/dev/null | sha256sum | cut -d' ' -f1)"
 
 pool_ready() {
     for m in $POOL; do
@@ -54,6 +64,24 @@ docker save paseo-agent:latest -o "$IMAGE"
 # answers `--version` on the host: booting a microVM cannot fit in Paseo's 5s
 # probe budget, and every probe that tried left a VM churning behind it.
 docker run --rm paseo-agent:latest claude --version > "$VERSION_FILE"
+
+# Drop machines the pool no longer covers. Without this, shrinking POOL_SIZE
+# would strand paseo-agent-3 and up: still allocated, never claimed, and still
+# holding their disk. The loop below only ever touches names it is creating.
+"$SMOLVM" machine ls --json 2>/dev/null | python3 -c '
+import json, sys
+keep = set(sys.argv[1:])
+for m in json.load(sys.stdin):
+    name = m.get("name", "")
+    if name.startswith("paseo-agent-") and name not in keep:
+        print(name)
+' $POOL | while read -r m; do
+    [ -n "$m" ] || continue
+    echo "removing pool machine $m (outside the configured pool)"
+    "$SMOLVM" machine stop --name "$m" >/dev/null 2>&1 || true
+    "$SMOLVM" machine delete --name "$m" -f >/dev/null 2>&1 || true
+    rm -f "$HOME/.cache/paseo-agent-vm/$m.lock" 2>/dev/null || true
+done
 
 # Stock the pool. The first start of each machine pays the one-time in-guest
 # image flatten (~15s); afterwards a session starts one in ~1.6s, which is what

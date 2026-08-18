@@ -51,6 +51,49 @@ def test_hub_password_rejects_anything_shorter():
         cli.validate_hub_password("")
 
 
+def test_pool_size_accepts_whole_numbers_from_flag_or_cached_config():
+    # argparse gives an int; local/config.toml can hand back either.
+    assert cli.validate_pool_size(3) == 3
+    assert cli.validate_pool_size("3") == 3
+    assert cli.validate_pool_size(1) == 1
+
+
+def test_pool_size_rejects_an_empty_pool():
+    # Zero machines means every sandboxed session is refused, which would look
+    # like the provider being broken rather than a config choice.
+    for bad in (0, -1, "nonsense", None):
+        with pytest.raises(ValueError):
+            cli.validate_pool_size(bad)
+
+
+def test_agent_memory_accepts_mib():
+    assert cli.validate_agent_memory("4096") == 4096
+    assert cli.validate_agent_memory(cli.AGENT_MEMORY_MIN) == cli.AGENT_MEMORY_MIN
+
+
+def test_agent_memory_catches_gib_mistaken_for_mib():
+    # `--agent-memory 2` meaning 2 GiB would otherwise build a pool of machines
+    # too small to boot, and say nothing about why.
+    with pytest.raises(ValueError) as err:
+        cli.validate_agent_memory(2)
+    assert "2048" in str(err.value)
+
+
+def test_agent_memory_rejects_nonsense():
+    for bad in (0, -1, "lots", None):
+        with pytest.raises(ValueError):
+            cli.validate_agent_memory(bad)
+
+
+def test_pool_geometry_has_defaults_rather_than_prompts():
+    # These have working defaults, so provision must not interrogate the user
+    # for them the way it does for a Tailscale key.
+    assert "agent_pool_size" not in cli.ACCOUNT_REQUIRED
+    assert "agent_memory" not in cli.ACCOUNT_REQUIRED
+    assert cli.validate_pool_size(cli.AGENT_POOL_SIZE_DEFAULT) >= 1
+    assert cli.validate_agent_memory(cli.AGENT_MEMORY_DEFAULT) == 2048
+
+
 def test_auth_key_prompt_is_masked():
     # Every credential in ACCOUNT_REQUIRED must be prompted for as a secret.
     assert cli.is_secret_field("ts_auth_key") is True
@@ -78,6 +121,20 @@ def test_parse_args_provision():
 def test_parse_args_provision_vm_name():
     ns = cli.parse_args(["provision", "--vm-name", "devbox"])
     assert ns.vm_name == "devbox"
+
+
+def test_parse_args_provision_pool_geometry():
+    ns = cli.parse_args(["provision", "--agent-pool-size", "3",
+                         "--agent-memory", "4096"])
+    assert (ns.agent_pool_size, ns.agent_memory) == (3, 4096)
+
+
+def test_parse_args_provision_pool_geometry_is_optional():
+    # Omitted flags must stay None so config.merge keeps the cached value
+    # rather than overwriting it with a default.
+    ns = cli.parse_args(["provision"])
+    assert ns.agent_pool_size is None
+    assert ns.agent_memory is None
 
 
 def test_parse_args_hub_install():

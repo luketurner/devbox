@@ -18,6 +18,8 @@ def test_build_env_sets_secrets_in_env():
         host="devbox.exe.xyz",
         ts_key="tskey-abc",
         claude_token="sk-ant-xyz",
+        agent_pool_size=3,
+        agent_memory=4096,
     )
     assert env["PATH"] == "/usr/bin"
     assert env["DEVBOX_HOST"] == "devbox.exe.xyz"
@@ -25,10 +27,20 @@ def test_build_env_sets_secrets_in_env():
     assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-xyz"
 
 
+def test_build_env_stringifies_the_pool_geometry():
+    # The environment has no other type, and the deploy templates these
+    # straight into pool.env.
+    env = provision.build_env({}, host="h", ts_key="k", claude_token="t",
+                              agent_pool_size=3, agent_memory=4096)
+    assert env["DEVBOX_AGENT_POOL_SIZE"] == "3"
+    assert env["DEVBOX_AGENT_MEMORY"] == "4096"
+
+
 def test_build_env_carries_no_hub_credentials():
     # Hub is a separate deploy now; provision has no reason to hold its login.
     env = provision.build_env({}, host="devbox.exe.xyz", ts_key="tskey-abc",
-                              claude_token="sk-ant-xyz")
+                              claude_token="sk-ant-xyz", agent_pool_size=2,
+                              agent_memory=2048)
     assert "DEVBOX_HUB_OWNER_EMAIL" not in env
     assert "DEVBOX_HUB_OWNER_PASSWORD" not in env
 

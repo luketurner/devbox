@@ -20,12 +20,17 @@ def load_toml(path: Path) -> dict:
 
 
 def _encode(data: dict) -> str:
-    # Minimal TOML writer: all values here are strings/bools. Keeps us off a
-    # third-party TOML *writer* dependency (stdlib only reads TOML).
+    # Minimal TOML writer: all values here are strings, bools or ints. Keeps us
+    # off a third-party TOML *writer* dependency (stdlib only reads TOML).
     lines = []
     for key, value in data.items():
         if isinstance(value, bool):
             lines.append(f"{key} = {str(value).lower()}")
+        # bool is a subclass of int, so this has to come second. Unquoted so
+        # the agent pool size and memory survive a round-trip as numbers rather
+        # than coming back as strings the next run has to re-coerce.
+        elif isinstance(value, int):
+            lines.append(f"{key} = {value}")
         else:
             escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
             lines.append(f'{key} = "{escaped}"')

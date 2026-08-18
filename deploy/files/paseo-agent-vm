@@ -47,13 +47,45 @@ VERSION_FILE = os.path.join(HOME, ".local/share/paseo-agent.version")
 STATE_DIR = os.path.join(HOME, ".cache/paseo-agent-vm")
 RECYCLE_LOG = os.path.join(STATE_DIR, "recycle.log")
 
-# One machine per concurrent session. Sized for the worst case -- two fit
-# alongside the daemon and an installed Hub and Postgres on a 2 vCPU / 8 GiB
-# box; past that the OOM killer decides, and it has already killed a running
-# microVM here once. Uninstalling Hub buys headroom, not a third machine.
-POOL = ["paseo-agent-1", "paseo-agent-2"]
-CPUS = "2"
-MEM = "2048"
+# Pool geometry, shared with paseo-agent-build via a file the deploy generates
+# from `provision --agent-pool-size / --agent-memory`. Both scripts have to
+# agree on machine names and on --mem, and they used to do that by each holding
+# a copy under a "must match" comment.
+POOL_CONF = os.path.join(HOME, ".config/paseo-agent/pool.env")
+
+# The defaults the deploy ships. Only reached if pool.env is missing -- a
+# half-finished provision, say -- where refusing to start would take every
+# sandboxed session down with it. One machine per concurrent session; a box
+# running the daemon plus an installed Hub and Postgres fits two on 2 vCPU /
+# 8 GiB, and past that the OOM killer decides. It has killed a microVM here once.
+POOL_DEFAULTS = {"POOL_SIZE": "2", "CPUS": "2", "MEM": "2048"}
+
+
+def log(msg):
+    print("paseo-agent-vm: %s" % msg, file=sys.stderr)
+
+
+def read_pool_conf(path=POOL_CONF):
+    """Parse the KEY=value pairs paseo-agent-build sources as shell."""
+    values = dict(POOL_DEFAULTS)
+    try:
+        with open(path) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                values[key.strip()] = value.strip().strip("\"'")
+    except OSError as err:
+        log("%s unreadable (%s); using built-in pool defaults" % (path, err))
+    return values
+
+
+_pool = read_pool_conf()
+# Named paseo-agent-1..N, matching how paseo-agent-build stocks them.
+POOL = ["paseo-agent-%d" % i for i in range(1, int(_pool["POOL_SIZE"]) + 1)]
+CPUS = _pool["CPUS"]
+MEM = _pool["MEM"]
 
 # Dev-server ports forwarded out of the VM. smolvm only ever binds these on the
 # host's 127.0.0.1 (it rejects an IP in the spec), so `tailscale serve`
@@ -64,10 +96,6 @@ MEM = "2048"
 # forwarded port. 8080 is likewise held for the Caddy webhook filter. Run a dev
 # server on one of these instead.
 PORTS = ["5173", "8000", "8081"]
-
-
-def log(msg):
-    print("paseo-agent-vm: %s" % msg, file=sys.stderr)
 
 
 def smolvm(*args, **kwargs):

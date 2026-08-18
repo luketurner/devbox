@@ -17,6 +17,14 @@ ACCOUNT_REQUIRED = ["exe_vm_name", "ts_auth_key"]
 HUB_REQUIRED = ["exe_vm_name", "hub_owner_email", "hub_owner_password"]
 
 TS_KEY_PREFIX = "tskey-"
+# Sandbox microVM pool geometry. Not in ACCOUNT_REQUIRED: these have working
+# defaults, so a missing value is filled in rather than prompted for.
+AGENT_POOL_SIZE_DEFAULT = 2
+AGENT_MEMORY_DEFAULT = 2048
+# A sanity floor, not a measured minimum -- it exists to catch `--agent-memory 2`
+# from someone thinking in GiB, which would otherwise produce a pool of machines
+# too small to boot.
+AGENT_MEMORY_MIN = 256
 # Hub refuses to bootstrap below this, and the refusal surfaces as the unit
 # timing out after 600s rather than as anything that names the password.
 HUB_PASSWORD_MIN = 12
@@ -41,6 +49,29 @@ def validate_hub_password(password: str) -> str:
     return password
 
 
+def validate_pool_size(value) -> int:
+    try:
+        size = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"expected a whole number of microVMs, got: {value!r}")
+    if size < 1:
+        raise ValueError(f"the pool needs at least one microVM, got {size}")
+    return size
+
+
+def validate_agent_memory(value) -> int:
+    try:
+        mib = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"expected a whole number of MiB, got: {value!r}")
+    if mib < AGENT_MEMORY_MIN:
+        raise ValueError(
+            f"expected MiB per microVM, got {mib} — the minimum is "
+            f"{AGENT_MEMORY_MIN} (did you mean {mib * 1024}?)"
+        )
+    return mib
+
+
 def split_repo(spec: str) -> tuple[str, str]:
     if "/" not in spec:
         raise ValueError(f"expected user/repo, got: {spec!r}")
@@ -58,6 +89,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
     prov = sub.add_parser("provision", help="create and provision the devbox VM")
     prov.add_argument("--vm-name", help="exe.dev VM name (overrides the cached one)")
+    # Cached like --vm-name, so these are set once rather than on every run.
+    prov.add_argument("--agent-pool-size", type=int,
+                      help="sandbox microVMs to keep pooled "
+                           f"(default {AGENT_POOL_SIZE_DEFAULT}); "
+                           "one per concurrent sandboxed session")
+    prov.add_argument("--agent-memory", type=int,
+                      help="MiB of memory per sandbox microVM "
+                           f"(default {AGENT_MEMORY_DEFAULT})")
 
     add = sub.add_parser("add-repo", help="enable a GitHub repo as a Paseo project")
     add.add_argument("repo_spec", help="GitHub repo as user/repo")
@@ -152,13 +191,22 @@ def _cmd_provision(ns) -> int:
               file=sys.stderr)
         return 1
 
-    account = _resolve_account_config(overrides={"exe_vm_name": ns.vm_name})
+    account = _resolve_account_config(overrides={
+        "exe_vm_name": ns.vm_name,
+        "agent_pool_size": ns.agent_pool_size,
+        "agent_memory": ns.agent_memory,
+    })
 
     # Fail here rather than half-way through the deploy on the VM.
     try:
         ts_key = validate_auth_key(account["ts_auth_key"])
+        # Absent until someone passes the flag, so default rather than prompt.
+        pool_size = validate_pool_size(
+            account.get("agent_pool_size", AGENT_POOL_SIZE_DEFAULT))
+        agent_memory = validate_agent_memory(
+            account.get("agent_memory", AGENT_MEMORY_DEFAULT))
     except ValueError as err:
-        print(f"ts_auth_key: {err}", file=sys.stderr)
+        print(f"{err}", file=sys.stderr)
         return 1
 
     # Claude token (local browser login once), cached in account config.
@@ -183,10 +231,12 @@ def _cmd_provision(ns) -> int:
     # never spent twice.
     print("Provisioning via pyinfra...")
     env = provision.build_env(dict(os.environ), host=host, ts_key=ts_key,
-                              claude_token=token)
+                              claude_token=token, agent_pool_size=pool_size,
+                              agent_memory=agent_memory)
     provision.run_pyinfra(env)
 
     print(f"Done. Provisioned {host}.")
+    print(f"Sandbox pool: {pool_size} microVM(s) at {agent_memory} MiB each.")
     print("Paseo daemon (6767) is on the tailnet — see the README to pair.")
     print("Hub is not installed: run `devbox.py hub install` if you want it.")
     return 0

@@ -13,7 +13,8 @@ FILES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "files")
 # The inventory reads every DEVBOX_* var optionally, because provision and the
 # two hub deploys each pass a different subset. Without that KeyError to lean
 # on, an unset key would quietly deploy `tailscale up --auth-key=None`.
-for _field in ("ts_authkey", "claude_token"):
+for _field in ("ts_authkey", "claude_token",
+               "agent_pool_size", "agent_memory"):
     if not getattr(data, _field, None):
         raise ValueError(
             f"provision needs {_field}: set the matching DEVBOX_* env var "
@@ -203,6 +204,18 @@ files.put(
 )
 # Shared by the pool build and paseo-agent-vm's rebuild path, so both apply the
 # same egress allowlist. Installed before the build below, which reads it.
+# Read by both paseo-agent-build and paseo-agent-vm, so the pool geometry has a
+# single source. Installed before the build below, which sources it and hashes
+# it -- changing the size or the memory therefore forces a restock rather than
+# printing "unchanged" over a pool with the old geometry.
+files.template(
+    name="Install agent pool config",
+    src=f"{FILES}/paseo-agent-pool.env.j2",
+    dest=f"{HOME}/.config/paseo-agent/pool.env",
+    mode="644",
+    agent_pool_size=data.agent_pool_size,
+    agent_memory=data.agent_memory,
+)
 files.put(
     name="Install agent egress allowlist generator",
     src=f"{FILES}/paseo-agent-egress",

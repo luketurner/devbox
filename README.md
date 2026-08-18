@@ -47,7 +47,7 @@ graph TB
         end
 
         subgraph mvm["smolvm microVM - pooled, recycled per session"]
-            VMCLAUDE["claude\nclaude-vm provider\n2 vCPU / 2 GiB"]
+            VMCLAUDE["claude\nclaude-vm provider\n2 vCPU / 2 GiB default"]
         end
     end
 
@@ -276,10 +276,28 @@ smolvm machine egress-events --name paseo-agent-1
 Note that DNS is intercepted by smolvm's netstack, so a guest can still *resolve*
 MagicDNS names even though it cannot connect to them.
 
-Each VM is capped at 2 vCPU / 2 GiB and there are two of them, so at most two
-sandboxed sessions run at once. A third is refused with a message rather than
-left to the OOM killer. The pool is sized for the worst case, a box that also
-runs Hub and Postgres; uninstalling Hub buys headroom rather than a third VM.
+By default there are two VMs at 2 vCPU / 2 GiB each, so at most two sandboxed
+sessions run at once. A session beyond that is refused with a message rather
+than left to the OOM killer. That default is sized for the worst case, a box
+also running Hub and Postgres.
+
+Both numbers are provisioning flags, cached in `local/config.toml` like the VM
+name, so you set them once:
+
+```bash
+uv run devbox.py provision --agent-pool-size 3 --agent-memory 4096
+```
+
+`--agent-memory` is MiB per microVM, matching smolvm's `--mem`. Sizing is yours
+to get right: nothing checks the total against the box's RAM, and overcommitting
+gets you the OOM killer, which has already killed a running microVM here once.
+Budget `pool-size x memory` against what `free -m` leaves after the daemon and,
+if installed, Hub and Postgres. vCPUs stay at 2 and have no flag.
+
+Changing either value rewrites `~/.config/paseo-agent/pool.env`, which is
+hashed into the image build stamp — so the next provision restocks the pool
+rather than leaving machines running the old geometry. Shrinking the pool
+deletes the machines that fall outside it.
 
 #### Why a pool
 
@@ -370,7 +388,8 @@ collide with a forwarded port.
 
 #### Pool lifecycle and cleanup
 
-The pool is `paseo-agent-1` and `paseo-agent-2` — visible in `smolvm machine ls`.
+The pool is `paseo-agent-1` … `paseo-agent-N` for `--agent-pool-size` N,
+default two — visible in `smolvm machine ls`.
 A session:
 
 1. claims a machine with an atomic lock file under `~/.cache/paseo-agent-vm/`;
@@ -447,7 +466,8 @@ Then set the GitHub App's webhook URL to
 
 Everything lives in `local/config.toml` inside the checkout (mode 0600, in a
 0700 directory): the VM name, the Tailscale auth key, the cached Claude token,
-and — only once you run `hub install` — the Hub owner login. Missing values are
+the sandbox pool size and per-VM memory, and — only once you run `hub install` —
+the Hub owner login. Missing values are
 prompted for on first use and reused thereafter, and each command asks only for
 what it needs: `provision` never prompts for the Hub login, and `add-repo` and
 `hub uninstall` want nothing but the VM name.

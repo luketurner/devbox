@@ -42,3 +42,25 @@ def test_save_toml_restricts_permissions(tmp_path: Path):
 def test_load_missing_returns_empty(tmp_path: Path):
     assert config.load_toml(tmp_path / "nope.toml") == {}
 
+
+
+def test_ints_round_trip_as_numbers(tmp_path):
+    # The agent pool geometry is numeric; quoting it would hand the next run a
+    # string to re-coerce, and merge() treats the two as different values.
+    path = tmp_path / "config.toml"
+    config.save_toml(path, {"agent_pool_size": 3, "agent_memory": 4096})
+    assert "agent_pool_size = 3" in path.read_text()
+    assert config.load_toml(path) == {"agent_pool_size": 3, "agent_memory": 4096}
+
+
+def test_bools_still_encode_as_bools(tmp_path):
+    # bool is a subclass of int, so the int branch must not swallow it.
+    path = tmp_path / "config.toml"
+    config.save_toml(path, {"flag": True, "off": False})
+    assert config.load_toml(path) == {"flag": True, "off": False}
+
+
+def test_omitted_flag_keeps_the_cached_geometry():
+    # argparse hands None for a flag the user left off.
+    assert config.merge({"agent_pool_size": 3},
+                        {"agent_pool_size": None}) == {"agent_pool_size": 3}
