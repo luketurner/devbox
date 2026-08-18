@@ -38,6 +38,19 @@ def test_validate_auth_key_rejects_anything_else():
         cli.validate_auth_key("")
 
 
+def test_hub_password_meets_hub_bootstrap_minimum():
+    assert cli.validate_hub_password("a" * 12) == "a" * 12
+
+
+def test_hub_password_rejects_anything_shorter():
+    # Hub refuses to bootstrap below 12 and says so only by timing out after
+    # 600s, so catch it before the deploy starts.
+    with pytest.raises(ValueError):
+        cli.validate_hub_password("a" * 11)
+    with pytest.raises(ValueError):
+        cli.validate_hub_password("")
+
+
 def test_auth_key_prompt_is_masked():
     # Every credential in ACCOUNT_REQUIRED must be prompted for as a secret.
     assert cli.is_secret_field("ts_auth_key") is True
@@ -65,6 +78,49 @@ def test_parse_args_provision():
 def test_parse_args_provision_vm_name():
     ns = cli.parse_args(["provision", "--vm-name", "devbox"])
     assert ns.vm_name == "devbox"
+
+
+def test_parse_args_hub_install():
+    ns = cli.parse_args(["hub", "install"])
+    assert (ns.command, ns.hub_command) == ("hub", "install")
+    assert ns.vm_name is None
+
+
+def test_parse_args_hub_uninstall():
+    ns = cli.parse_args(["hub", "uninstall"])
+    assert (ns.command, ns.hub_command) == ("hub", "uninstall")
+
+
+def test_parse_args_hub_takes_vm_name_like_provision():
+    for action in ("install", "uninstall"):
+        ns = cli.parse_args(["hub", action, "--vm-name", "devbox"])
+        assert ns.vm_name == "devbox"
+
+
+def test_parse_args_hub_requires_an_action():
+    # A bare `hub` must not be ambiguous about install vs uninstall.
+    with pytest.raises(SystemExit):
+        cli.parse_args(["hub"])
+
+
+def test_every_subcommand_has_a_handler():
+    # main() dispatches through these dicts; a missing entry would be a
+    # KeyError at run time rather than at import.
+    assert set(cli.COMMANDS) == {"provision", "add-repo", "hub"}
+    assert set(cli.HUB_COMMANDS) == {"install", "uninstall"}
+
+
+def test_provision_no_longer_requires_hub_credentials():
+    # Hub is installed by its own command, so provision must not prompt for an
+    # owner login it will never pass to a deploy.
+    assert "hub_owner_email" not in cli.ACCOUNT_REQUIRED
+    assert "hub_owner_password" not in cli.ACCOUNT_REQUIRED
+    assert cli.ACCOUNT_REQUIRED == ["exe_vm_name", "ts_auth_key"]
+
+
+def test_hub_install_requires_the_owner_credentials():
+    assert set(cli.HUB_REQUIRED) == {
+        "exe_vm_name", "hub_owner_email", "hub_owner_password"}
 
 
 def test_parse_args_add_repo():

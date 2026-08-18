@@ -15,8 +15,11 @@ Creates a "devbox" VM with extra installed tools (above what comes with exeuntu 
 - node (via NodeSource, current LTS)
 - tailscale (w/ssh)
 - paseo (daemon autostarted on the tailnet, port 6767)
-- paseo hub, self-hosted via docker compose (tailnet, port 3000)
 - smolvm (microVM sandbox for paseo agents)
+
+Paseo Hub is *not* installed by default — it costs ~1.5 GiB of images plus a
+running Postgres, which is usually better spent on agent microVMs. Add it with
+`devbox.py hub install` (see [Self-hosted Hub](#self-hosted-hub)).
 
 ## Architecture
 
@@ -37,7 +40,7 @@ graph TB
         REPO["~/projects/REPO\nworkspace / worktree"]
         HOSTCLAUDE["claude\nstock provider\nruns on the host"]
 
-        subgraph dc["docker compose - paseo-hub.service"]
+        subgraph dc["docker compose - paseo-hub.service (opt-in)"]
             CADDY["Caddy filter\n0.0.0.0:8080\nPOST /webhook only\nelse 302 to tailnet"]
             HUB["Paseo Hub\ntailnet:3000"]
             PG["Postgres 17\nnot published"]
@@ -70,8 +73,8 @@ graph TB
 
 Three boundaries are worth reading off that diagram:
 
-- **The tailnet is the auth boundary.** The daemon (6767) and the Hub dashboard (3000) bind to
-  the VM's Tailscale IP only, never `0.0.0.0`. Postgres isn't published at all.
+- **The tailnet is the auth boundary.** The daemon (6767) and, if installed, the Hub dashboard
+  (3000) bind to the VM's Tailscale IP only, never `0.0.0.0`. Postgres isn't published at all.
 - **Exactly one path is reachable from the public internet**, and only after you opt in with
   `ssh exe.dev share set-public`: `POST /webhook`. The Caddy container redirects everything else
   back to the tailnet, so the Hub UI never answers publicly.
@@ -139,9 +142,9 @@ That creates the exe.dev GitHub integration for the repo, attaches it to the VM,
 and registers the clone as a Paseo workspace under `~/projects`. The VM itself is
 not tied to any repo; add as many as you like.
 
-Once provisioning finishes, drive the box through Paseo (see below) — pair a
-client with the daemon, or open the Hub dashboard. For a shell, plain
-`ssh <vm-name>.exe.xyz` still works.
+Once provisioning finishes, drive the box through Paseo (see below) by pairing a
+client with the daemon. For a shell, plain `ssh <vm-name>.exe.xyz` still works.
+If you also want the Hub dashboard, install it with `uv run devbox.py hub install`.
 
 ### If provisioning drops mid-run
 
@@ -174,14 +177,35 @@ paseo daemon pair --json
 
 ### Self-hosted Hub
 
-Every devbox also runs [Paseo Hub](https://github.com/getpaseo/hub) — Hub plus
-Postgres, via docker compose, managed by the `paseo-hub` systemd user service.
+[Paseo Hub](https://github.com/getpaseo/hub) — Hub plus Postgres and a Caddy
+webhook filter, via docker compose, managed by the `paseo-hub` systemd user
+service. It is **opt-in**, because the three images come to ~1.5 GiB and
+Postgres stays resident; on a box whose job is running agent microVMs that is
+usually the wrong trade. `provision` does not touch it either way:
+
+```bash
+uv run devbox.py hub install
+uv run devbox.py hub uninstall
+```
+
 The dashboard is at `http://<devbox-tailnet-name>:3000`, published on the
 Tailscale IP only.
 
-The owner email and password are prompted on first run and cached in
-`local/config.toml`. **The password must be at least 12 characters** —
-Hub refuses to bootstrap otherwise.
+The owner email and password are prompted by `hub install` and cached in
+`local/config.toml`. **The password must be at least 12 characters** — Hub
+refuses to bootstrap otherwise, so `hub install` rejects a shorter one up front
+rather than letting the unit time out.
+
+`hub uninstall` is destructive and takes everything: the containers, all three
+images, the Postgres volume, `auth-secret`, `~/.config/paseo-hub`, the clone in
+`~/.local/share/paseo-hub`, and the systemd unit. The organization, the owner
+login and any API keys go with it — a later `hub install` bootstraps from
+scratch. It is safe to run on a box that never had Hub, and safe to run twice.
+
+Two things it deliberately leaves alone: any `PASEO_HUB_*` lines you added to
+`~/.config/devbox.env` (below), and a public webhook share, since
+`ssh exe.dev share port <vm> 8080` is an exe.dev-side setting — revoke that
+yourself if you had opted in.
 
 To link the local daemon to the local Hub, log into the dashboard, create an
 organization API key, and append it to `~/.config/devbox.env` on the VM (the
@@ -253,8 +277,9 @@ Note that DNS is intercepted by smolvm's netstack, so a guest can still *resolve
 MagicDNS names even though it cannot connect to them.
 
 Each VM is capped at 2 vCPU / 2 GiB and there are two of them, so at most two
-sandboxed sessions run at once alongside Hub and Postgres. A third is refused
-with a message rather than left to the OOM killer.
+sandboxed sessions run at once. A third is refused with a message rather than
+left to the OOM killer. The pool is sized for the worst case, a box that also
+runs Hub and Postgres; uninstalling Hub buys headroom rather than a third VM.
 
 #### Why a pool
 
@@ -339,7 +364,9 @@ agent's dev server :5173  →  devbox 127.0.0.1:5173  →  http://<devbox>.<tail
 Use the full MagicDNS name: `serve` routes by hostname, so the bare tailnet IP
 returns 404. Ports are fixed when the VM starts, so point your dev server at one
 of the three above. `3000`, `6767` and `8080` are deliberately not in the list —
-Hub, the daemon and the webhook filter already hold those on the tailnet.
+the daemon holds 6767, and 3000 and 8080 stay reserved for Hub and its webhook
+filter even on a box where Hub isn't installed, so a later `hub install` can't
+collide with a forwarded port.
 
 #### Pool lifecycle and cleanup
 
@@ -399,6 +426,8 @@ grant.
 
 ### Public webhooks (opt-in)
 
+Only relevant if you ran `hub install` — the Caddy filter is part of that stack.
+
 Provider webhooks are inbound from GitHub/Slack, so they can't reach a
 tailnet-only Hub. A Caddy container on port 8080 forwards **only `POST /webhook`**
 to Hub and redirects everything else back to the tailnet URL, so the dashboard
@@ -417,9 +446,11 @@ Then set the GitHub App's webhook URL to
 ## Config
 
 Everything lives in `local/config.toml` inside the checkout (mode 0600, in a
-0700 directory): the VM name, the Tailscale auth key, the Hub owner login,
-and the cached Claude token. Missing values are prompted for on first use and
-reused thereafter.
+0700 directory): the VM name, the Tailscale auth key, the cached Claude token,
+and — only once you run `hub install` — the Hub owner login. Missing values are
+prompted for on first use and reused thereafter, and each command asks only for
+what it needs: `provision` never prompts for the Hub login, and `add-repo` and
+`hub uninstall` want nothing but the VM name.
 
 `local/` is gitignored, so these values can't be committed by accident. Because
 the config travels with the clone rather than living in `~/.config`, a second

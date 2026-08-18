@@ -7,10 +7,14 @@ hosts = [
     (
         _host,
         {
-            "ts_authkey": os.environ["DEVBOX_TS_AUTHKEY"],
-            "claude_token": os.environ["CLAUDE_CODE_OAUTH_TOKEN"],
-            "hub_owner_email": os.environ["DEVBOX_HUB_OWNER_EMAIL"],
-            "hub_owner_password": os.environ["DEVBOX_HUB_OWNER_PASSWORD"],
+            # Optional, unlike DEVBOX_HOST: provision and the two hub deploys
+            # share this inventory but pass different subsets, so demanding all
+            # four here would make `hub uninstall` need a Tailscale key. Each
+            # deploy file asserts the values it actually uses.
+            "ts_authkey": os.environ.get("DEVBOX_TS_AUTHKEY"),
+            "claude_token": os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"),
+            "hub_owner_email": os.environ.get("DEVBOX_HUB_OWNER_EMAIL"),
+            "hub_owner_password": os.environ.get("DEVBOX_HUB_OWNER_PASSWORD"),
             # Let paramiko use the user's ssh config and trust first-seen keys,
             # matching the manual `ssh <name>.exe.xyz` flow.
             "ssh_strict_host_key_checking": "accept-new",

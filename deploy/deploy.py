@@ -2,13 +2,23 @@
 import os
 
 from pyinfra import host
-from pyinfra.operations import apt, files, git, server
+from pyinfra.operations import apt, files, server
 
 data = host.data
 HOME = "/home/exedev"
 BASHRC = f"{HOME}/.bashrc"
 # files.put resolves relative srcs against the CWD, not this file — be explicit.
 FILES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "files")
+
+# The inventory reads every DEVBOX_* var optionally, because provision and the
+# two hub deploys each pass a different subset. Without that KeyError to lean
+# on, an unset key would quietly deploy `tailscale up --auth-key=None`.
+for _field in ("ts_authkey", "claude_token"):
+    if not getattr(data, _field, None):
+        raise ValueError(
+            f"provision needs {_field}: set the matching DEVBOX_* env var "
+            "(devbox.py provision does this for you)"
+        )
 
 # --- node via NodeSource -----------------------------------------------------
 # Ubuntu's own nodejs is 18.x (EOL). Guarded on the sources file so a re-deploy
@@ -226,7 +236,7 @@ server.shell(
 )
 # Dev servers inside the microVM are forwarded to the devbox's 127.0.0.1 only
 # (smolvm rejects a bind IP), so republish them onto the tailnet. --http avoids
-# depending on tailnet HTTPS certs, matching how the daemon and Hub are served.
+# depending on tailnet HTTPS certs, matching how the daemon is served.
 for _port in ["5173", "8000", "8081"]:
     server.shell(
         name=f"tailscale serve dev port {_port}",
@@ -240,45 +250,6 @@ server.shell(
         "export XDG_RUNTIME_DIR=/run/user/$(id -u) && "
         f"if python3 {HOME}/.config/paseo-agent/register-provider.py | grep -q changed; "
         "then systemctl --user restart paseo.service; fi"
-    ],
-)
-
-# --- paseo hub (docker compose, tailnet UI + filtered public webhook) -------
-# Docker and Compose ship with exeuntu and exedev is in the docker group, so
-# no apt work and no sudo here. Lingering is already enabled above.
-git.repo(
-    name="Clone paseo hub",
-    src="https://github.com/getpaseo/hub.git",
-    dest=f"{HOME}/.local/share/paseo-hub",
-)
-# files.template is the one op that both interpolates host data and sets mode;
-# the owner password must not land in the mode-less ~/.config/devbox.env.
-files.template(
-    name="Write Hub bootstrap env",
-    src=f"{FILES}/hub.env.j2",
-    dest=f"{HOME}/.config/paseo-hub/hub.env",
-    mode="600",
-    owner_email=data.hub_owner_email,
-    owner_password=data.hub_owner_password,
-)
-for _src, _dest, _mode in [
-    ("paseo-hub-compose.override.yml", ".config/paseo-hub/compose.override.yml", "644"),
-    ("paseo-hub-Caddyfile", ".config/paseo-hub/Caddyfile", "644"),
-    ("paseo-hub", ".local/bin/paseo-hub", "755"),
-    ("paseo-hub.service", ".config/systemd/user/paseo-hub.service", "644"),
-]:
-    files.put(
-        name=f"Install {_src}",
-        src=f"{FILES}/{_src}",
-        dest=f"{HOME}/{_dest}",
-        mode=_mode,
-    )
-server.shell(
-    name="Enable and start paseo hub",
-    commands=[
-        "export XDG_RUNTIME_DIR=/run/user/$(id -u) && "
-        "systemctl --user daemon-reload && "
-        "systemctl --user enable --now paseo-hub.service"
     ],
 )
 

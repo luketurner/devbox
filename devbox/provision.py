@@ -6,6 +6,11 @@ import time
 
 INVENTORY = "deploy/inventory.py"
 DEPLOY = "deploy/deploy.py"
+# Hub is opt-in -- it costs ~1.5 GiB of images plus a running Postgres, which a
+# devbox may prefer to leave to agent microVMs -- so it lives in its own pair of
+# deploys rather than in DEPLOY. Driven by `devbox.py hub install/uninstall`.
+HUB_INSTALL = "deploy/hub_install.py"
+HUB_UNINSTALL = "deploy/hub_uninstall.py"
 
 # Connections through the exe.dev proxy drop mid-run often enough to matter:
 # a channel dies, the operation reports "Command socket/SSH error", and pyinfra
@@ -19,32 +24,53 @@ RUN_ATTEMPTS = 3
 RUN_RETRY_DELAY = 10
 
 
-def build_pyinfra_args() -> list[str]:
-    return ["pyinfra", INVENTORY, DEPLOY,
+def build_pyinfra_args(deploy: str = DEPLOY) -> list[str]:
+    # -y because pyinfra otherwise stops on "Detected changes ... skip this
+    # step with -y" and reads stdin. These runs are driven by a CLI the user
+    # already invoked deliberately, and without it a non-TTY caller dies on
+    # EOFError -- which run_pyinfra would then retry twice more before failing.
+    return ["pyinfra", "-y", INVENTORY, deploy,
             "--retry", str(OP_RETRIES),
             "--retry-delay", str(OP_RETRY_DELAY)]
 
 
-def build_env(base: dict, *, host: str, ts_key: str, claude_token: str,
-              hub_owner_email: str, hub_owner_password: str) -> dict:
+def build_env(base: dict, *, host: str, ts_key: str,
+              claude_token: str) -> dict:
     env = dict(base)
     env["DEVBOX_HOST"] = host
     env["DEVBOX_TS_AUTHKEY"] = ts_key
     env["CLAUDE_CODE_OAUTH_TOKEN"] = claude_token
-    env["DEVBOX_HUB_OWNER_EMAIL"] = hub_owner_email
-    env["DEVBOX_HUB_OWNER_PASSWORD"] = hub_owner_password
     return env
 
 
-def run_pyinfra(env: dict, *, attempts: int = RUN_ATTEMPTS,
+def build_hub_env(base: dict, *, host: str, owner_email: str | None = None,
+                  owner_password: str | None = None) -> dict:
+    """Environment for the hub deploys.
+
+    The credentials are optional because uninstall has no use for them, and
+    handing a teardown an owner password just to satisfy a signature is how
+    secrets end up somewhere they need not be.
+    """
+    env = dict(base)
+    env["DEVBOX_HOST"] = host
+    if owner_email is not None:
+        env["DEVBOX_HUB_OWNER_EMAIL"] = owner_email
+    if owner_password is not None:
+        env["DEVBOX_HUB_OWNER_PASSWORD"] = owner_password
+    return env
+
+
+def run_pyinfra(env: dict, *, deploy: str = DEPLOY,
+                attempts: int = RUN_ATTEMPTS,
                 delay: int = RUN_RETRY_DELAY,
                 runner=subprocess.run, sleep=time.sleep):
-    """Run the deploy, retrying the whole run if it fails.
+    """Run the given deploy, retrying the whole run if it fails.
 
-    Safe because the deploy is idempotent: a repeat run skips everything that
-    already succeeded. A genuine failure still surfaces, just later.
+    Safe because every deploy here is idempotent: a repeat run skips what
+    already succeeded, and the uninstall steps are guarded so a second pass is
+    a no-op. A genuine failure still surfaces, just later.
     """
-    args = build_pyinfra_args()
+    args = build_pyinfra_args(deploy)
     for attempt in range(1, attempts + 1):
         result = runner(args, env=env)
         if result.returncode == 0:

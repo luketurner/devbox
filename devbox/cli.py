@@ -11,10 +11,15 @@ import time
 
 from devbox import claude_auth, config, exe, paseo, provision
 
-ACCOUNT_REQUIRED = ["exe_vm_name", "ts_auth_key",
-                    "hub_owner_email", "hub_owner_password"]
+ACCOUNT_REQUIRED = ["exe_vm_name", "ts_auth_key"]
+# Hub is installed separately, so provision has no business interrogating the
+# user for an owner login it will never pass to a deploy.
+HUB_REQUIRED = ["exe_vm_name", "hub_owner_email", "hub_owner_password"]
 
 TS_KEY_PREFIX = "tskey-"
+# Hub refuses to bootstrap below this, and the refusal surfaces as the unit
+# timing out after 600s rather than as anything that names the password.
+HUB_PASSWORD_MIN = 12
 
 _USER_REPO_RE = re.compile(r"[A-Za-z0-9._-]+")
 
@@ -25,6 +30,15 @@ def validate_auth_key(key: str) -> str:
             f"expected a Tailscale auth key starting with {TS_KEY_PREFIX!r}"
         )
     return key
+
+
+def validate_hub_password(password: str) -> str:
+    if len(password) < HUB_PASSWORD_MIN:
+        raise ValueError(
+            f"Hub requires at least {HUB_PASSWORD_MIN} characters, "
+            f"got {len(password)}"
+        )
+    return password
 
 
 def split_repo(spec: str) -> tuple[str, str]:
@@ -47,6 +61,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
     add = sub.add_parser("add-repo", help="enable a GitHub repo as a Paseo project")
     add.add_argument("repo_spec", help="GitHub repo as user/repo")
+
+    hub = sub.add_parser("hub", help="manage the self-hosted Paseo Hub")
+    hub_sub = hub.add_subparsers(dest="hub_command", required=True)
+    for action, help_text in [
+        ("install", "install Hub, Postgres and the webhook filter"),
+        ("uninstall", "remove Hub and its containers, images and data"),
+    ]:
+        hub_action = hub_sub.add_parser(action, help=help_text)
+        hub_action.add_argument(
+            "--vm-name", help="exe.dev VM name (overrides the cached one)")
 
     return p.parse_args(argv)
 
@@ -72,8 +96,9 @@ def _prompt(field: str, secret: bool = False) -> str:
 def _resolve_account_config(required=None, overrides=None) -> dict:
     """Load the account config, applying CLI overrides and prompting for gaps.
 
-    `required` is narrowed by add-repo so it doesn't interrogate the user for
-    Tailscale creds and a Hub password it will never use.
+    `required` is narrowed by the subcommands that need less -- add-repo and
+    hub uninstall want a VM name and nothing else, so neither should interrogate
+    the user for credentials it will never pass to a deploy.
     """
     acct = config.load_toml(config.ACCOUNT_PATH)
     # merge skips None/"", so an omitted flag keeps the cached value.
@@ -158,15 +183,71 @@ def _cmd_provision(ns) -> int:
     # never spent twice.
     print("Provisioning via pyinfra...")
     env = provision.build_env(dict(os.environ), host=host, ts_key=ts_key,
-                              claude_token=token,
-                              hub_owner_email=account["hub_owner_email"],
-                              hub_owner_password=account["hub_owner_password"])
+                              claude_token=token)
     provision.run_pyinfra(env)
 
     print(f"Done. Provisioned {host}.")
-    print("Paseo daemon (6767) and Hub (3000) are on the tailnet — "
-          "see the README to pair.")
+    print("Paseo daemon (6767) is on the tailnet — see the README to pair.")
+    print("Hub is not installed: run `devbox.py hub install` if you want it.")
     return 0
+
+
+def _hub_target(ns, required) -> tuple[dict, str]:
+    """Resolve the account config and the VM host both hub commands deploy to."""
+    account = _resolve_account_config(required=required,
+                                      overrides={"exe_vm_name": ns.vm_name})
+    return account, exe.vm_host(account["exe_vm_name"])
+
+
+def _cmd_hub_install(ns) -> int:
+    missing = preflight(("ssh",))
+    if missing:
+        print(f"Missing required tools on PATH: {', '.join(missing)}",
+              file=sys.stderr)
+        return 1
+
+    account, host = _hub_target(ns, HUB_REQUIRED)
+
+    # Fail here rather than 600s into a unit that will never come up.
+    try:
+        password = validate_hub_password(account["hub_owner_password"])
+    except ValueError as err:
+        print(f"hub_owner_password: {err}", file=sys.stderr)
+        return 1
+
+    print(f"Installing Paseo Hub on {host}...")
+    env = provision.build_hub_env(dict(os.environ), host=host,
+                                  owner_email=account["hub_owner_email"],
+                                  owner_password=password)
+    provision.run_pyinfra(env, deploy=provision.HUB_INSTALL)
+
+    print("Done. Hub is on the tailnet at port 3000 — see the README to pair.")
+    return 0
+
+
+def _cmd_hub_uninstall(ns) -> int:
+    missing = preflight(("ssh",))
+    if missing:
+        print(f"Missing required tools on PATH: {', '.join(missing)}",
+              file=sys.stderr)
+        return 1
+
+    _, host = _hub_target(ns, ["exe_vm_name"])
+
+    print(f"Removing Paseo Hub from {host}...")
+    # No credentials: a teardown has no use for them.
+    env = provision.build_hub_env(dict(os.environ), host=host)
+    provision.run_pyinfra(env, deploy=provision.HUB_UNINSTALL)
+
+    print("Done. Hub, its containers, images and database are gone.")
+    return 0
+
+
+HUB_COMMANDS = {"install": _cmd_hub_install, "uninstall": _cmd_hub_uninstall}
+
+
+def _cmd_hub(ns) -> int:
+    return HUB_COMMANDS[ns.hub_command](ns)
 
 
 def _cmd_add_repo(ns) -> int:
@@ -197,8 +278,15 @@ def _cmd_add_repo(ns) -> int:
     return 0
 
 
+COMMANDS = {
+    "provision": _cmd_provision,
+    "add-repo": _cmd_add_repo,
+    "hub": _cmd_hub,
+}
+
+
 def main(argv=None) -> int:
     ns = parse_args(sys.argv[1:] if argv is None else argv)
-    if ns.command == "add-repo":
-        return _cmd_add_repo(ns)
-    return _cmd_provision(ns)
+    # Explicit, so a subcommand added without a handler fails loudly rather
+    # than silently provisioning the box.
+    return COMMANDS[ns.command](ns)

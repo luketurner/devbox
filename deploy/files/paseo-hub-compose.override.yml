@@ -1,7 +1,17 @@
-# Layered over getpaseo/hub's compose.yml. Compose merges `ports` by appending,
-# so replacing upstream's all-interfaces "3000:3000" needs !override.
+# Layered over getpaseo/hub's compose.yml.
 services:
   hub:
+    # Upstream's compose.yml has `env_file: .env`, which hands the whole file to
+    # the container -- including PASEO_HUB_BIND, which the wrapper writes as the
+    # *host* publish address. Hub reads it and tries to listen on the devbox's
+    # tailnet IP, which does not exist inside the container's netns, so it dies
+    # with EADDRNOTAVAIL and crash-loops. `environment` wins over `env_file`.
+    environment:
+      PASEO_HUB_BIND: "0.0.0.0"
+    # ${PASEO_HUB_BIND} below is interpolated by Compose from .env at parse
+    # time, not from the block above, so the host side stays tailnet-only.
+    # Compose merges `ports` by appending, so replacing upstream's
+    # all-interfaces "3000:3000" needs !override.
     ports: !override
       - "${PASEO_HUB_BIND}:3000:3000"
 

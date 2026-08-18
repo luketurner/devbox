@@ -1,6 +1,9 @@
 # devbox config/secrets, kept in the checkout
 local/
 
+# pyinfra writes this next to the CWD whenever a run raises
+pyinfra-debug.log
+
 # python
 __pycache__/
 *.pyc

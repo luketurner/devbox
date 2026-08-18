@@ -47,9 +47,10 @@ VERSION_FILE = os.path.join(HOME, ".local/share/paseo-agent.version")
 STATE_DIR = os.path.join(HOME, ".cache/paseo-agent-vm")
 RECYCLE_LOG = os.path.join(STATE_DIR, "recycle.log")
 
-# One machine per concurrent session. Two fit alongside Hub, Postgres and the
-# daemon on a 2 vCPU / 8 GiB box; past that the OOM killer decides, and it has
-# already killed a running microVM here once.
+# One machine per concurrent session. Sized for the worst case -- two fit
+# alongside the daemon and an installed Hub and Postgres on a 2 vCPU / 8 GiB
+# box; past that the OOM killer decides, and it has already killed a running
+# microVM here once. Uninstalling Hub buys headroom, not a third machine.
 POOL = ["paseo-agent-1", "paseo-agent-2"]
 CPUS = "2"
 MEM = "2048"
@@ -58,8 +59,10 @@ MEM = "2048"
 # host's 127.0.0.1 (it rejects an IP in the spec), so `tailscale serve`
 # republishes them onto the tailnet -- see the README.
 #
-# 3000 is deliberately absent: Hub already owns it on the tailnet. Run a dev
-# server on one of these instead. 8080 is likewise taken, by the Caddy filter.
+# 3000 is deliberately absent: it stays reserved for Hub on the tailnet even
+# where Hub isn't installed, so `devbox.py hub install` can never collide with a
+# forwarded port. 8080 is likewise held for the Caddy webhook filter. Run a dev
+# server on one of these instead.
 PORTS = ["5173", "8000", "8081"]
 
 
