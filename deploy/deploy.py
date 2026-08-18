@@ -191,6 +191,14 @@ files.put(
     dest=f"{HOME}/.config/paseo-agent/agent-entry",
     mode="755",
 )
+# Shared by the pool build and paseo-agent-vm's rebuild path, so both apply the
+# same egress allowlist. Installed before the build below, which reads it.
+files.put(
+    name="Install agent egress allowlist generator",
+    src=f"{FILES}/paseo-agent-egress",
+    dest=f"{HOME}/.local/bin/paseo-agent-egress",
+    mode="755",
+)
 files.put(
     name="Install agent image build script",
     src=f"{FILES}/paseo-agent-build",

@@ -12,6 +12,7 @@ IMAGE="$SHARE/paseo-agent.tar"
 VERSION_FILE="$SHARE/paseo-agent.version"
 STAMP="$SHARE/paseo-agent.sha256"
 SMOLVM="$HOME/.smolvm/smolvm"
+EGRESS_BIN="$HOME/.local/bin/paseo-agent-egress"
 
 # Must match POOL in paseo-agent-vm.
 POOL="paseo-agent-1 paseo-agent-2"
@@ -21,7 +22,10 @@ MEM=2048
 # Hash the build context *and this script*: agent-entry is COPYed in, and how the
 # pool is built is as much a part of the result as the Dockerfile. Leaving this
 # script out would let a change to the pool logic leave stale machines in place.
-HASH="$(cat "$CONF"/Dockerfile "$CONF"/agent-entry "$0" 2>/dev/null | sha256sum | cut -d' ' -f1)"
+# The egress generator is hashed for the same reason: its output is baked into
+# each machine at create time, so tightening the policy has to force a rebuild
+# rather than print "unchanged" over a pool still running the old one.
+HASH="$(cat "$CONF"/Dockerfile "$CONF"/agent-entry "$0" "$EGRESS_BIN" 2>/dev/null | sha256sum | cut -d' ' -f1)"
 
 pool_ready() {
     for m in $POOL; do
@@ -35,6 +39,10 @@ if [ -f "$IMAGE" ] && [ -f "$VERSION_FILE" ] \
     echo "unchanged"
     exit 0
 fi
+
+# Egress allowlist confining the guest to the public internet -- see
+# paseo-agent-egress. Unquoted on use: the flags are one word each.
+EGRESS="$("$EGRESS_BIN")"
 
 docker build -t paseo-agent:latest "$CONF"
 
@@ -53,7 +61,7 @@ docker run --rm paseo-agent:latest claude --version > "$VERSION_FILE"
 for m in $POOL; do
     "$SMOLVM" machine stop --name "$m" >/dev/null 2>&1 || true
     "$SMOLVM" machine delete --name "$m" -f >/dev/null 2>&1 || true
-    "$SMOLVM" machine create --name "$m" --image "$IMAGE" --net --cpus "$CPUS" --mem "$MEM" >/dev/null
+    "$SMOLVM" machine create --name "$m" --image "$IMAGE" --net $EGRESS --cpus "$CPUS" --mem "$MEM" >/dev/null
     "$SMOLVM" machine start --name "$m" >/dev/null
     "$SMOLVM" machine stop --name "$m" >/dev/null
 done

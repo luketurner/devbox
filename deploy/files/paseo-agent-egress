@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""Print the smolvm --allow-cidr flags that confine an agent microVM to the public internet.
+
+smolvm's egress policy is an *allowlist* only -- `machine create` takes
+--allow-cidr/--allow-host, and there is no deny flag -- so "keep the tailnet out
+of reach" has to be written as the complement of the ranges we want gone. That
+complement is 48 IPv4 CIDRs, and a typo in any one of them is a silent hole, so
+it is computed here rather than hand-maintained.
+
+Why this is its own file: the flags are needed both when the pool is first built
+(paseo-agent-build) and every time a used machine is rebuilt (paseo-agent-vm's
+recycle). Duplicating the list across a shell script and a Python one would let
+the two drift, and a recycled machine silently running the old policy is exactly
+the failure this is meant to prevent.
+"""
+
+import ipaddress
+
+# Everything an agent must not reach. The tailnet is the point of the exercise:
+# smolvm NATs the guest through the host, so without a policy a guest can reach
+# the host's tailscaled (whose web API answers unauthenticated on
+# 100.100.100.100 and discloses the tailnet name, owner and device addresses)
+# and every tailnet-only service, including the Paseo daemon on :6767.
+DENY = [
+    "100.64.0.0/10",    # CGNAT: the tailnet, incl. MagicDNS 100.100.100.100
+    "10.0.0.0/8",       # RFC1918
+    "172.16.0.0/12",    # RFC1918, incl. the docker bridges Hub and Postgres sit on
+    "192.168.0.0/16",   # RFC1918
+    "169.254.0.0/16",   # link-local, incl. the exe.dev integration address
+]
+
+# Punched back out of the deny list above. This is the guest's own NAT link:
+# eth0 is 100.96.0.2/30 and the default gateway 100.96.0.1 is the host, which is
+# what agent-entry points github.int.exe.xyz at. Dropping it would take git and
+# gh down with the tailnet. It holds the netstack gateway and nothing else -- no
+# tailnet node lives in this /30.
+KEEP = ["100.96.0.0/30"]
+
+# IPv6 needs no complement: allowing only global unicast already excludes the
+# tailnet's ULA range (fd7a:115c:a1e0::/48), every other ULA, and link-local.
+ALLOW6 = ["2000::/3"]
+
+# 127.0.0.0/8 is deliberately absent from DENY. Sessions always get the
+# virtio-net backend (paseo-agent-vm passes --port, which selects it), so the
+# guest's loopback is its own and denying it would only break guest-internal
+# traffic.
+
+
+def allowed_v4():
+    """IPv4 minus DENY, plus KEEP."""
+    nets = [ipaddress.ip_network("0.0.0.0/0")]
+    for entry in DENY:
+        denied = ipaddress.ip_network(entry)
+        split = []
+        for net in nets:
+            if net.subnet_of(denied):
+                continue
+            if denied.subnet_of(net):
+                split.extend(net.address_exclude(denied))
+            else:
+                split.append(net)
+        nets = split
+    return sorted(set(nets) | {ipaddress.ip_network(k) for k in KEEP})
+
+
+def main():
+    for net in allowed_v4():
+        print("--allow-cidr=%s" % net)
+    for net in ALLOW6:
+        print("--allow-cidr=%s" % net)
+
+
+if __name__ == "__main__":
+    main()
