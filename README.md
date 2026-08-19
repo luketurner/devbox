@@ -288,11 +288,23 @@ name, so you set them once:
 uv run devbox.py provision --agent-pool-size 3 --agent-memory 4096
 ```
 
-`--agent-memory` is MiB per microVM, matching smolvm's `--mem`. Sizing is yours
-to get right: nothing checks the total against the box's RAM, and overcommitting
-gets you the OOM killer, which has already killed a running microVM here once.
-Budget `pool-size x memory` against what `free -m` leaves after the daemon and,
-if installed, Hub and Postgres. vCPUs stay at 2 and have no flag.
+`--agent-memory` is MiB per microVM, matching smolvm's `--mem`. vCPUs stay at 2
+and have no flag.
+
+The deploy refuses a pool the box cannot hold. Every pool machine can be running
+at once, so it checks `pool-size x memory` against `MemAvailable` on the VM and
+fails with the numbers it used and a size that would fit:
+
+```
+  requested   8 microVMs x 2048 MiB = 16384 MiB
+  available   6804 MiB (of 7935 MiB total)
+```
+
+The check runs *before* anything is written, so a refused geometry leaves the
+box exactly as it was — the existing pool keeps running. It measures available
+rather than total memory, which means an active sandboxed session (holding its
+machine's memory) or an installed Hub and Postgres both count against you.
+`devbox.py hub uninstall` frees roughly half a gigabyte if you don't use it.
 
 Changing either value rewrites `~/.config/paseo-agent/pool.env`, which is
 hashed into the image build stamp — so the next provision restocks the pool

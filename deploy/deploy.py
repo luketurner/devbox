@@ -204,6 +204,23 @@ files.put(
 )
 # Shared by the pool build and paseo-agent-vm's rebuild path, so both apply the
 # same egress allowlist. Installed before the build below, which reads it.
+files.put(
+    name="Install agent pool memory check",
+    src=f"{FILES}/paseo-agent-memcheck",
+    dest=f"{HOME}/.local/bin/paseo-agent-memcheck",
+    mode="755",
+)
+# Deliberately ahead of the template below: the whole point is that a pool the
+# box cannot hold never reaches pool.env. Writing it first and failing after
+# would leave paseo-agent-vm reading a POOL_SIZE whose machines were never
+# built, and recycle() would create them on demand -- the OOM this prevents.
+server.shell(
+    name="Check the agent pool fits in memory",
+    commands=[
+        f"{HOME}/.local/bin/paseo-agent-memcheck "
+        f"{data.agent_pool_size} {data.agent_memory}"
+    ],
+)
 # Read by both paseo-agent-build and paseo-agent-vm, so the pool geometry has a
 # single source. Installed before the build below, which sources it and hashes
 # it -- changing the size or the memory therefore forces a restock rather than

@@ -1,0 +1,81 @@
+#!/bin/sh
+# Refuse a sandbox pool the box cannot hold.
+#
+#   paseo-agent-memcheck POOL_SIZE MEM_MIB
+#
+# Every pool machine can be running at once -- that is the point of the pool --
+# so the worst case is POOL_SIZE * MEM, and overcommitting it does not degrade
+# gracefully: the OOM killer picks a victim, and it has already killed a running
+# microVM on this box once.
+#
+# Checked against MemAvailable rather than MemTotal because what matters is what
+# is left after the daemon, docker and (if installed) Hub and Postgres. Stopped
+# pool machines hold no memory, so an idle box measures the pool's real headroom.
+#
+# The deploy runs this *before* writing pool.env, so a rejected geometry leaves
+# the box untouched. Writing it first and failing afterwards would leave
+# paseo-agent-vm reading a POOL_SIZE whose machines were never built -- and
+# recycle() would then create them on demand, which is the OOM this prevents.
+set -e
+
+POOL_SIZE="$1"
+MEM="$2"
+MEMINFO="${MEMINFO:-/proc/meminfo}"
+
+if [ -z "$POOL_SIZE" ] || [ -z "$MEM" ]; then
+    echo "usage: paseo-agent-memcheck POOL_SIZE MEM_MIB" >&2
+    exit 2
+fi
+
+field() {
+    awk -v k="$1" '$1 == k":" { print int($2 / 1024); found = 1 }
+                   END { if (!found) exit 1 }' "$MEMINFO"
+}
+
+# Fail open only here. A box whose /proc/meminfo cannot be read is broken in a
+# way this check cannot speak to, and blocking the whole deploy on it would be
+# worse than proceeding with a warning.
+if ! AVAIL="$(field MemAvailable)"; then
+    echo "paseo-agent-memcheck: cannot read MemAvailable from $MEMINFO;" \
+         "skipping the pool memory check" >&2
+    exit 0
+fi
+TOTAL="$(field MemTotal || echo 0)"
+
+REQUIRED=$((POOL_SIZE * MEM))
+if [ "$REQUIRED" -le "$AVAIL" ]; then
+    echo "pool fits: ${POOL_SIZE} x ${MEM} MiB = ${REQUIRED} MiB of ${AVAIL} MiB available"
+    exit 0
+fi
+
+# Both suggestions can land outside what the CLI accepts -- a pool of zero, or
+# a per-VM size below its 256 MiB floor -- so only offer the ones that are
+# actually usable rather than advice that fails validation.
+FITS=$((AVAIL / MEM))
+PER_VM=$((AVAIL / POOL_SIZE))
+MEM_MIN=256
+
+{
+    echo "paseo-agent-memcheck: the requested sandbox pool does not fit."
+    echo
+    echo "  requested   ${POOL_SIZE} microVMs x ${MEM} MiB = ${REQUIRED} MiB"
+    echo "  available   ${AVAIL} MiB (of ${TOTAL} MiB total)"
+    echo
+    echo "Every pool machine can run at once, so this would overcommit the box"
+    echo "and leave the OOM killer to choose a victim. Nothing has been changed."
+    echo
+    echo "Options:"
+    if [ "$FITS" -ge 1 ]; then
+        echo "  --agent-pool-size ${FITS}   keeps ${MEM} MiB per microVM"
+    fi
+    if [ "$PER_VM" -ge "$MEM_MIN" ]; then
+        echo "  --agent-memory ${PER_VM}   keeps ${POOL_SIZE} microVMs"
+    fi
+    if [ "$FITS" -lt 1 ] && [ "$PER_VM" -lt "$MEM_MIN" ]; then
+        echo "  neither flag can satisfy this on a box with ${AVAIL} MiB free."
+    fi
+    echo "  Or free memory first: an active sandboxed session holds its"
+    echo "  machine's memory, and Hub plus Postgres cost ~0.5 GiB --"
+    echo "  'devbox.py hub uninstall' if you do not use it."
+} >&2
+exit 1

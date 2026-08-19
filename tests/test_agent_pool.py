@@ -19,6 +19,7 @@ _FILES = pathlib.Path(__file__).resolve().parents[1] / "deploy" / "files"
 _WRAPPER = _FILES / "paseo-agent-vm"
 _TEMPLATE = _FILES / "paseo-agent-pool.env.j2"
 _BUILD = _FILES / "paseo-agent-build"
+_MEMCHECK = _FILES / "paseo-agent-memcheck"
 
 
 def _load():
@@ -107,3 +108,85 @@ def test_build_script_derives_names_from_pool_size():
     body = _BUILD.read_text()
     assert re.search(r'POOL="\$POOL paseo-agent-\$i"', body)
     assert 'POOL="paseo-agent-1 paseo-agent-2"' not in body
+
+
+def _meminfo(tmp_path, available_mib, total_mib=8192, omit_available=False):
+    lines = [f"MemTotal:       {total_mib * 1024} kB"]
+    if not omit_available:
+        lines.append(f"MemAvailable:   {available_mib * 1024} kB")
+    path = tmp_path / "meminfo"
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def _memcheck(tmp_path, pool_size, memory, **kw):
+    return subprocess.run(
+        ["sh", str(_MEMCHECK), str(pool_size), str(memory)],
+        env={"PATH": "/usr/bin:/bin", "MEMINFO": str(_meminfo(tmp_path, **kw))},
+        capture_output=True, text=True,
+    )
+
+
+def test_pool_that_fits_is_accepted(tmp_path):
+    result = _memcheck(tmp_path, 2, 2048, available_mib=6000)
+    assert result.returncode == 0
+
+
+def test_pool_exactly_filling_available_memory_is_accepted(tmp_path):
+    # The boundary belongs to "fits": 4096 of 4096 is not an overcommit.
+    assert _memcheck(tmp_path, 2, 2048, available_mib=4096).returncode == 0
+
+
+def test_pool_one_mib_over_is_refused(tmp_path):
+    result = _memcheck(tmp_path, 2, 2048, available_mib=4095)
+    assert result.returncode == 1
+    assert "does not fit" in result.stderr
+
+
+def test_refusal_reports_the_numbers_it_used(tmp_path):
+    result = _memcheck(tmp_path, 8, 2048, available_mib=6000, total_mib=8192)
+    assert "16384" in result.stderr   # requested
+    assert "6000" in result.stderr    # available
+    assert "8192" in result.stderr    # total
+
+
+def test_refusal_suggests_a_pool_size_that_would_fit(tmp_path):
+    result = _memcheck(tmp_path, 8, 2048, available_mib=6000)
+    assert "--agent-pool-size 2" in result.stderr
+
+
+def test_refusal_does_not_suggest_an_empty_pool(tmp_path):
+    # 3000 MiB free cannot hold even one 4096 MiB machine, and
+    # `--agent-pool-size 0` would be rejected by the CLI anyway.
+    result = _memcheck(tmp_path, 2, 4096, available_mib=3000)
+    assert result.returncode == 1
+    assert "--agent-pool-size 0" not in result.stderr
+
+
+def test_refusal_does_not_suggest_memory_below_the_cli_floor(tmp_path):
+    # 400 MiB across 8 machines is 50 MiB each, under the 256 MiB floor.
+    result = _memcheck(tmp_path, 8, 2048, available_mib=400)
+    assert result.returncode == 1
+    assert "--agent-memory 50" not in result.stderr
+    assert "neither flag" in result.stderr
+
+
+def test_unreadable_meminfo_fails_open(tmp_path):
+    # A box whose meminfo cannot be parsed is broken in a way this check cannot
+    # speak to; blocking the deploy on it would be worse than proceeding.
+    result = _memcheck(tmp_path, 2, 2048, available_mib=0, omit_available=True)
+    assert result.returncode == 0
+    assert "skipping" in result.stderr
+
+
+def test_missing_arguments_are_a_usage_error(tmp_path):
+    result = subprocess.run(["sh", str(_MEMCHECK)], capture_output=True, text=True)
+    assert result.returncode == 2
+
+
+def test_deploy_checks_memory_before_writing_the_pool_config():
+    # Order matters: a rejected geometry must not reach pool.env, or the wrapper
+    # would read a POOL_SIZE whose machines were never built.
+    body = (pathlib.Path(__file__).resolve().parents[1] / "deploy" / "deploy.py").read_text()
+    assert body.index("Check the agent pool fits in memory") < body.index(
+        "Install agent pool config")
