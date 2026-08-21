@@ -73,12 +73,18 @@ def test_gateway_exception_is_only_the_nat_link():
     assert not _allowed("100.96.0.4")
 
 
-def test_flags_are_emitted_for_both_families(capsys):
+def test_no_v6_is_allowed(capsys):
+    """v6 is denied by omission, and that is deliberate -- do not "restore" it.
+
+    Allowing 2000::/3 looked free, since smolvm has no v6 egress. It was not:
+    the netstack terminates the connection to an allowed v6 destination locally
+    before failing to forward it, so Happy Eyeballs sees a successful connect,
+    commits to the dead path, and never falls back to the v4 address that works.
+    Denying the family still excludes what the old entry was there to exclude,
+    the tailnet ULA fd7a:115c:a1e0::/48 included.
+    """
     egress.main()
     flags = capsys.readouterr().out.split()
     assert flags, "an empty allowlist would be applied as no restriction at all"
     assert all(f.startswith("--allow-cidr=") for f in flags)
-    assert "--allow-cidr=2000::/3" in flags, "IPv6 global unicast must be allowed"
-    # Any v6 outside 2000::/3 -- notably the tailnet's fd7a:115c:a1e0::/48 -- is
-    # excluded by virtue of not being listed.
-    assert sum(":" in f for f in flags) == 1
+    assert sum(":" in f for f in flags) == 0, "no v6 CIDR may be allowed"

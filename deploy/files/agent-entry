@@ -16,6 +16,24 @@
 HOST_ADDR="$(ip route 2>/dev/null | awk '/^default/ {print $3; exit}')"
 [ -n "$HOST_ADDR" ] || HOST_ADDR=127.0.0.1
 
+# smolvm has no working IPv6 egress, yet it hands the guest a *scope global* ULA
+# and its netstack answers the SYN for a v6 destination before failing to forward
+# it. Happy Eyeballs reads that successful connect as proof v6 works, commits to
+# it, and never falls back -- so a plain `curl https://pypi.org` dies mid-TLS
+# while `curl -4` against the same host returns 200. Taking the ULA away is what
+# makes getaddrinfo's AI_ADDRCONFIG stop handing out AAAA records at all, so
+# nothing tries v6 in the first place. Belt to the egress allowlist's braces:
+# paseo-agent-egress no longer allows v6 either.
+#
+# The egress interface only, never `all` -- that would take ::1 down with it, and
+# in-guest dev servers binding v6 loopback (plus the ::1 line seeded below) need
+# it. Derived from the routing table for the same reason HOST_ADDR is: which
+# backend smolvm picked is not ours to assume.
+EGRESS_IF="$(ip route 2>/dev/null | awk '/^default/ {print $5; exit}')"
+if [ -n "$EGRESS_IF" ] && [ -f "/proc/sys/net/ipv6/conf/$EGRESS_IF/disable_ipv6" ]; then
+    echo 1 > "/proc/sys/net/ipv6/conf/$EGRESS_IF/disable_ipv6" 2>/dev/null || true
+fi
+
 # /etc/hosts is regenerated per boot, hence doing this here rather than baking
 # it into an image layer.
 # The guest boots without an /etc/hosts at all, so seed the usual entries

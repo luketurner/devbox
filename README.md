@@ -247,7 +247,7 @@ IPv4 CIDRs and a typo in any one of them is a silent hole:
 | `100.64.0.0/10` | CGNAT — the whole tailnet, including MagicDNS `100.100.100.100` |
 | `10/8`, `172.16/12`, `192.168/16` | RFC1918, including the docker bridges Hub and Postgres sit on |
 | `169.254.0.0/16` | link-local, including the exe.dev integration address |
-| everything outside `2000::/3` | v6 needs no complement: global unicast alone excludes the tailnet ULA `fd7a:115c:a1e0::/48` and all link-local |
+| all IPv6 | the family is allowed nowhere, which excludes the tailnet ULA `fd7a:115c:a1e0::/48` and link-local by omission — see below for why it is denied rather than narrowed |
 
 One hole is deliberate. `100.96.0.0/30` — the guest's own NAT link, where `eth0`
 is `100.96.0.2` and the gateway `100.96.0.1` is the host — stays allowed, because
@@ -275,6 +275,18 @@ smolvm machine egress-events --name paseo-agent-1
 
 Note that DNS is intercepted by smolvm's netstack, so a guest can still *resolve*
 MagicDNS names even though it cannot connect to them.
+
+IPv6 is denied outright rather than narrowed to global unicast, because a v6
+range that is allowed but unroutable is worse than one that is closed. smolvm has
+no working v6 egress, but its netstack terminates the connection to an *allowed*
+v6 address locally and only then fails to forward it — so the guest sees a
+successful connect, Happy Eyeballs commits to that path, and the client never
+falls back to the v4 address that would have worked. The symptom was a plain
+`curl https://pypi.org` dying mid-TLS in the sandbox while `curl -4` against the
+same host returned 200. `agent-entry` also disables v6 on the guest's egress
+interface, which drops the scope-global ULA smolvm assigns and stops
+`getaddrinfo` returning AAAA records at all; the allowlist is the control, and
+the interface change is what keeps clients from reaching for v6 to begin with.
 
 By default there are two VMs at 2 vCPU / 2 GiB each, so at most two sandboxed
 sessions run at once. A session beyond that is refused with a message rather
