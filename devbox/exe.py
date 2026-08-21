@@ -11,14 +11,18 @@ def vm_host(name: str) -> str:
 
 def integration_name(user: str, repo: str) -> str:
     # Owner-qualified: one VM now serves many repos, and bare repo names
-    # collide across owners.
-    return f"{user}-{repo}"
+    # collide across owners. Lowercased because exe.dev refuses anything else
+    # ("invalid name: name must be lowercase"), and GitHub owners and repos
+    # routinely have capitals.
+    return f"{user}-{repo}".lower()
 
 
 def build_integration_add_args(user: str, repo: str, vm_name: str) -> list[str]:
     return [
         "integrations", "add", "github",
         "--name", integration_name(user, repo),
+        # As typed, unlike --name: GitHub matches owner/repo case-insensitively,
+        # and this URL's last segment is what names the clone directory.
         "--repository", f"{user}/{repo}",
         # Attach to the VM directly. The old tag:<repo> form paired with a
         # matching tag on the VM, which is what made this one-VM-per-repo.

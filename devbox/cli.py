@@ -307,7 +307,12 @@ def _cmd_add_repo(ns) -> int:
               file=sys.stderr)
         return 1
 
-    user, repo = split_repo(ns.repo_spec)
+    try:
+        user, repo = split_repo(ns.repo_spec)
+    except ValueError as err:
+        print(f"{err}", file=sys.stderr)
+        return 1
+
     account = _resolve_account_config(required=["exe_vm_name"])
     vm_name = account["exe_vm_name"]
     host = exe.vm_host(vm_name)
@@ -339,4 +344,10 @@ def main(argv=None) -> int:
     ns = parse_args(sys.argv[1:] if argv is None else argv)
     # Explicit, so a subcommand added without a handler fails loudly rather
     # than silently provisioning the box.
-    return COMMANDS[ns.command](ns)
+    try:
+        return COMMANDS[ns.command](ns)
+    except exe.ExeError as err:
+        # exe.dev refusing a name or a duplicate is a user-facing condition, not
+        # a bug in devbox -- report it rather than dumping a traceback.
+        print(f"{err}", file=sys.stderr)
+        return 1

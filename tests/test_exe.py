@@ -11,6 +11,14 @@ def test_integration_name_is_owner_qualified():
     assert exe.integration_name("me", "repo") == "me-repo"
 
 
+def test_integration_name_is_lowercased():
+    # exe.dev rejects the name outright -- `invalid name: name must be lowercase
+    # (got "luketurner-PersonalPVT")` -- so add-repo failed for any repo with a
+    # capital in it, which on GitHub is most of them.
+    assert exe.integration_name("luketurner", "PersonalPVT") == (
+        "luketurner-personalpvt")
+
+
 def test_build_integration_add_args_attaches_to_the_vm():
     args = exe.build_integration_add_args("me", "repo", "devbox")
     assert args == [
@@ -19,6 +27,15 @@ def test_build_integration_add_args_attaches_to_the_vm():
         "--repository", "me/repo",
         "--attach", "vm:devbox",
     ]
+
+
+def test_build_integration_add_args_keeps_the_repository_case():
+    # Only --name is lowercased. --repository feeds the clone URL, whose last
+    # segment names the directory under ~/projects, so downcasing it too would
+    # check the repo out as ~/projects/personalpvt.
+    args = exe.build_integration_add_args("luketurner", "PersonalPVT", "devbox")
+    assert args[args.index("--name") + 1] == "luketurner-personalpvt"
+    assert args[args.index("--repository") + 1] == "luketurner/PersonalPVT"
 
 
 def test_build_new_vm_args():

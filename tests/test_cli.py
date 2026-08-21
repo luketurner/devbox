@@ -1,6 +1,6 @@
 import pytest
 
-from devbox import cli
+from devbox import cli, exe
 
 
 def test_split_repo():
@@ -165,6 +165,17 @@ def test_every_subcommand_has_a_handler():
     # KeyError at run time rather than at import.
     assert set(cli.COMMANDS) == {"provision", "add-repo", "hub"}
     assert set(cli.HUB_COMMANDS) == {"install", "uninstall"}
+
+
+def test_main_reports_exe_errors_instead_of_raising(monkeypatch, capsys):
+    # An exe.dev refusal (a rejected name, an existing VM) is a user-facing
+    # condition; unhandled it reached the user as a two-level traceback.
+    def boom(ns):
+        raise exe.ExeError('invalid name: name must be lowercase')
+
+    monkeypatch.setitem(cli.COMMANDS, "provision", boom)
+    assert cli.main(["provision"]) == 1
+    assert "must be lowercase" in capsys.readouterr().err
 
 
 def test_provision_no_longer_requires_hub_credentials():
